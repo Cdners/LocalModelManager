@@ -1,0 +1,23 @@
+.venv/
+.python/
+__pycache__/
+.pytest_cache/
+build/
+dist/
+config/
+models/
+runtime/
+downloads/
+updates/
+logs/
+artifacts/
+*.spec
+.env
+.env.*
+*.pem
+*.key
+# Local machine acceptance and integration helpers are not release source.
+tools/*
+!tools/preview_ui.py
+!tools/collect_licenses.py
+
