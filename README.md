@@ -20,7 +20,7 @@ Windows 原生本地 AI Runtime 管理器，Python 3.12 + PySide6。模型与推
 
 ## 下载与快速开始
 
-0.3.1 修复运行环境预留项的错误按钮，并打通概览切换模型：在概览下拉框选择 Fun-ASR 等模型，未配置时点“安装并切换”，配置后点“切换到此模型”。共享端口的受管旧服务会先停止，新模型启动失败则恢复旧服务。模型目录的“下载并配置”完成后自动加入概览；已下载完整文件会直接复用。切换后第三方客户端的 Model ID 请以页面显示值为准。
+0.3.1 修复运行环境预留项的错误按钮，并打通概览切换模型：在概览下拉框选择 Fun-ASR 等模型，未配置时点“安装并切换”，配置后点“切换到此模型”。共享端口的受管旧服务会先停止，新模型启动失败则恢复旧服务。模型目录的“下载并配置”完成后自动加入概览；已下载完整文件会直接复用。原生直连端口的 Model ID 随模型变化；0.3.2 的网关使用下文说明的固定 `local-asr` 入口。
 
 1. 在 [Releases](https://github.com/Cdners/LocalModelManager/releases/latest) 下载 Windows x64 ZIP 并完整解压。
 2. 打开 `LocalModelManager.exe`，在「概览」安装 Qwen3 ASR。
@@ -94,6 +94,8 @@ uv pip install --python .venv\Scripts\python.exe -r pyproject.toml --extra build
 每个服务由独立监督器捕获输出、轮转日志，管理器退出后可继续运行。Stop 前核对 PID、创建时间、程序路径和完整命令行；只有自己的确认身份的进程才会收到停止信号。
 
 ## OpenTypeless 配置
+
+0.3.2：开启网关（Compatibility Proxy）的 ASR 配置使用固定 Model ID `local-asr`。第三方客户端填一次即可，网关会把它映射到当前服务的真实 ID；切换 Qwen / Fun-ASR 不再留下过期 ID。引擎原生端口仍使用真实 Model ID，显式指定其他 ID 的请求不会被偷偷重写。
 
 OpenTypeless 页选中 READY 的 ASR Profile 后生成：
 

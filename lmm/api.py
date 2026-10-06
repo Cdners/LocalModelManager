@@ -27,6 +27,13 @@ def model_ids(data):
     if not ids: raise ValueError("The server has not exposed a model ID yet.")
     return ids
 
+def connection_model_id(profile, ids):
+    if not ids:return ''
+    if profile.type=='asr' and profile.compatibility_proxy:
+        from .proxy import ASR_ALIAS
+        return ASR_ALIAS
+    return ids[0]
+
 
 def parse_transcription(response: httpx.Response):
     if not response.is_success:

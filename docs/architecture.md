@@ -100,6 +100,8 @@ transcribe.cpp 的 cu12 wheel 不包含 NVIDIA DLL；管理器从 NVIDIA 在 PyP
 
 ## API 与 Windows 兼容
 
+0.3.2 增加网关 ASR 固定别名 `local-asr`。仅当 multipart 的 model 字段明确等于该别名时，网关将其改为当前受管引擎的 ID，音频字节与其他字段保持不变。`/v1/models` 同时列出真实 ID 和别名，概览/语音输入页复制固定别名。原生端口和其他显式 ID 仍按原语义处理。这样 OpenTypeless 切换引擎后不会继续请求过期的 Qwen ID。
+
 各 Profile 独立监听端口，公开 `/health` 和 `/v1/models`；任务路由由 Adapter 能力决定。llama.cpp/audio.cpp 使用原生服务，transcribe.cpp 使用本地桥接提供 `/v1/audio/transcriptions`，当前接收单/双声道 PCM WAV，转换为 16kHz float32；暂不接受 MP3 等压缩音频。
 
 可选的单 Profile Gateway 透传 `/v1/audio/transcriptions`、`/v1/chat/completions`、`/v1/embeddings`、`/v1/rerank`、`/v1/audio/speech`、`/v1/models`、`/health`。当前没有聚合多 Profile 的统一端口或跨 Runtime 调度；以页面实际复制的 Base URL 为准。原有 Compatibility Proxy 开关同时启用 Qwen 文本前缀清理。聊天流式响应目前缓冲后转发，需要实时 SSE 的客户端应使用引擎原生端口。

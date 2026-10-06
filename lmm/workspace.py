@@ -272,10 +272,12 @@ class ApplicationPages:
         bind(self.api_label,"Health {health}     Model list {models}     Transcription {transcription}",health=mark("health"),models=mark("models"),transcription=mark("transcription"))
         ids=state.get("model_ids",[]); ready=text=="READY"
         self.base_label.setText(api.base_url(profile,True) if profile else "")
-        self.id_label.setText(ids[0] if ids else tr("Waiting for the service"))
+        connection_id=api.connection_model_id(profile,ids) if profile else ''
+        self.id_label.setText(connection_id or tr("Waiting for the service"))
         if hasattr(self,"integration_text"):
             if profile and profile.type=="asr" and ready:
-                bind(self.integration_text,"Provider: Local / Custom Whisper\nBase URL: {url}\nModel: {model}\nAPI key: leave empty\n\nThe model ID is read from your running service.",url=api.base_url(profile,True),model=ids[0])
+                source="Provider: Local / Custom Whisper\nBase URL: {url}\nModel: {model}\nAPI key: leave empty\n\nThe gateway follows the model selected in the manager." if profile.compatibility_proxy else "Provider: Local / Custom Whisper\nBase URL: {url}\nModel: {model}\nAPI key: leave empty\n\nThe model ID is read from your running service."
+                bind(self.integration_text,source,url=api.base_url(profile,True),model=connection_id)
             else:bind(self.integration_text,"Select an ASR profile and start the service to see its connection settings.")
 
     def copy_base(self):
@@ -284,7 +286,7 @@ class ApplicationPages:
 
     def copy_model(self):
         profile=self.current_profile(); ids=self.profile_states.get(profile.id,{}).get("model_ids",[]) if profile else []
-        if ids:QApplication.clipboard().setText(ids[0]); self.statusBar().showMessage(tr("Copied to clipboard"),3000)
+        if ids:QApplication.clipboard().setText(api.connection_model_id(profile,ids)); self.statusBar().showMessage(tr("Copied to clipboard"),3000)
         else:self.error("No model ID has been returned by /v1/models yet.")
 
     def build_models(self):

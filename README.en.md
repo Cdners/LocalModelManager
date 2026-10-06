@@ -18,7 +18,7 @@ Download the Windows x64 package from [Releases](https://github.com/Cdners/Local
 
 ## Interface and languages
 
-0.3.1 connects catalog models to the Overview selector. Choose **Install and switch** for an unconfigured model, or **Switch to this model** for an existing profile. Complete local downloads are reused. Only managed services sharing the target ports are replaced; a failed switch restores them. Reserved runtimes show an explanation with disabled actions. Copy the new Model ID when updating external clients.
+0.3.1 connects catalog models to the Overview selector. Choose **Install and switch** for an unconfigured model, or **Switch to this model** for an existing profile. Complete local downloads are reused. Only managed services sharing the target ports are replaced; a failed switch restores them. Reserved runtimes show an explanation with disabled actions. Direct engine ports require the new Model ID; the 0.3.2 gateway provides the stable alias described below.
 
 Version 0.3.0 includes English and Simplified Chinese. Choose **Settings → General → Language**. The interface updates and saves the language immediately without restarting model services. Other settings are applied with **Save settings**.
 
@@ -43,6 +43,8 @@ Use **Overview → Install Qwen3 ASR** for the Qwen3-ASR-1.7B Q8_0 model and its
 Model profiles contain the model files, listening address, port, GPU layers, and optional arguments. Start, stop, and restart managed services from the overview or tray. The manager verifies process identity before stopping a service.
 
 ## Connect OpenTypeless
+
+0.3.2: ASR profiles using the Compatibility Proxy expose the stable model ID `local-asr`. The gateway maps that explicit alias to the active engine's model ID, so switching Qwen/Fun-ASR does not require reconfiguring the client. Direct engine ports still use their native IDs; other explicit IDs are not rewritten.
 
 Start an ASR profile and wait for **READY**. Open **Voice input** and copy the actual Base URL and Model ID into OpenTypeless's Local / Custom Whisper configuration. Leave the API key empty for the local service.
 

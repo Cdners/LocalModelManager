@@ -161,7 +161,7 @@ class Manager:
                     "log": str(self.store.logs/(profile.id+".log")),
                     "stop_file": str(self.records/(session+".stop")),
                     "proxy": profile.compatibility_proxy, "proxy_port": profile.proxy_port, "port": profile.port,
-                    "host": profile.host}
+                    "host": profile.host, "proxy_model_id":profile.id if profile.type=='asr' else None}
             job = self.records/(session+".job.json"); atomic_json(job, spec)
             supervisor = launch_hidden(helper_command("--supervise", str(job)), self.store.root)
             deadline = time.monotonic()+15
@@ -297,7 +297,7 @@ def supervise(job_path: Path):
         atomic_json(record_path, record)
         if job.get("proxy"):
             from .proxy import CompatibilityProxy
-            proxy=CompatibilityProxy(job["proxy_port"],job["port"],job["host"]); proxy.start()
+            proxy=CompatibilityProxy(job["proxy_port"],job["port"],job["host"],asr_model_id=job.get('proxy_model_id')); proxy.start()
         def read_output():
             for line in iter(process.stdout.readline, b""):
                 logger.info(line.decode("utf-8",errors="replace").rstrip())

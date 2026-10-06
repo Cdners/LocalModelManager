@@ -257,6 +257,8 @@ ZH.update({
     'Install the selected runtime first.':'请先安装所选模型的运行环境。',
 })
 
+ZH['Provider: Local / Custom Whisper\nBase URL: {url}\nModel: {model}\nAPI key: leave empty\n\nThe gateway follows the model selected in the manager.']='服务商：Local / Custom Whisper\n接口地址：{url}\n模型：{model}\nAPI 密钥：留空\n\n固定入口自动使用管理器中已切换的模型。'
+
 _language = "zh"
 _english = {value: key for key, value in ZH.items()}
 
