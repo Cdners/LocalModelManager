@@ -18,6 +18,8 @@ Download the Windows x64 package from [Releases](https://github.com/Cdners/Local
 
 ## Interface and languages
 
+0.3.1 connects catalog models to the Overview selector. Choose **Install and switch** for an unconfigured model, or **Switch to this model** for an existing profile. Complete local downloads are reused. Only managed services sharing the target ports are replaced; a failed switch restores them. Reserved runtimes show an explanation with disabled actions. Copy the new Model ID when updating external clients.
+
 Version 0.3.0 includes English and Simplified Chinese. Choose **Settings → General → Language**. The interface updates and saves the language immediately without restarting model services. Other settings are applied with **Save settings**.
 
 Navigation, controls, service states, tables, profile dialogs, and the tray menu follow the selected language. Model IDs, paths, user input, transcripts, and original logs retain their contents.

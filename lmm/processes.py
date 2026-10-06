@@ -213,6 +213,35 @@ class Manager:
         self.stop(profile_id)
         return self.start(profile_id)
 
+    def switch(self, profile_id, control=None, progress=lambda _:None):
+        """Replace only managed services sharing the target ports; restore on failure."""
+        from .api import wait_ready
+        from .jobs import Control
+        control = control or Control()
+        with self.lock:
+            profile = self.store.get_profile(profile_id)
+            if self.is_running(profile_id):
+                return self.record(profile_id) | wait_ready(profile,lambda:self.is_running(profile_id),control=control)
+            from .adapters import get_adapter
+            adapter = get_adapter(profile.runtime_id)
+            if not adapter.executable(self.store).exists(): raise ValueError('Install the selected runtime first.')
+            if not self.store.path(profile.model_path).exists(): raise ValueError('Model file or directory is missing.')
+            ports = {profile.port} | ({profile.proxy_port} if profile.compatibility_proxy else set())
+            previous = [p.id for p in self.store.profiles if p.id != profile_id and self.is_running(p.id)
+                        and ports & ({p.port} | ({p.proxy_port} if p.compatibility_proxy else set()))]
+            stopped = []
+            control.check()
+            try:
+                for identity in previous:
+                    self.stop(identity); stopped.append(identity)
+                control.check()
+                record = self.start(profile_id)
+                return record | wait_ready(profile,lambda:self.is_running(profile_id),control=control,progress=progress)
+            except Exception:
+                self.stop(profile_id)
+                self.start_many(stopped); self.wait_ready_many(stopped)
+                raise
+
     def stop_all(self):
         running = [p.id for p in self.store.profiles if self.is_running(p.id)]
         for pid in running: self.stop(pid)

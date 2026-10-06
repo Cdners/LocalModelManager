@@ -20,6 +20,8 @@ Windows 原生本地 AI Runtime 管理器，Python 3.12 + PySide6。模型与推
 
 ## 下载与快速开始
 
+0.3.1 修复运行环境预留项的错误按钮，并打通概览切换模型：在概览下拉框选择 Fun-ASR 等模型，未配置时点“安装并切换”，配置后点“切换到此模型”。共享端口的受管旧服务会先停止，新模型启动失败则恢复旧服务。模型目录的“下载并配置”完成后自动加入概览；已下载完整文件会直接复用。切换后第三方客户端的 Model ID 请以页面显示值为准。
+
 1. 在 [Releases](https://github.com/Cdners/LocalModelManager/releases/latest) 下载 Windows x64 ZIP 并完整解压。
 2. 打开 `LocalModelManager.exe`，在「概览」安装 Qwen3 ASR。
 3. 启动模型并等待就绪，在「语音输入」测试麦克风。

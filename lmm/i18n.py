@@ -248,6 +248,15 @@ ZH.update({'Import models and choose a compatible runtime.': '导入模型并选
 
 ZH.update({"Task":"任务","Architecture":"架构","Format":"格式","Unknown":"未知","Model source / search keywords":"模型来源 / 搜索关键词","Double-click a result to list its model files.":"双击结果查看模型文件。","No matching model repositories found.":"未找到匹配的模型仓库。","No models installed yet. Import a model source or choose a catalog entry.":"暂无模型，请导入模型来源或选择模型目录中的条目。"})
 
+ZH.update({
+    'Not configured':'尚未配置',
+    'Install and switch':'安装并切换',
+    'Switch to this model':'切换到此模型',
+    'Install this model and its runtime, then switch the active service.':'自动安装模型和运行环境，完成后切换服务。',
+    'This runtime is planned, but not available yet.':'此运行环境尚未实现，暂不能检查或安装。请使用 llama.cpp、audio.cpp 或 transcribe.cpp。',
+    'Install the selected runtime first.':'请先安装所选模型的运行环境。',
+})
+
 _language = "zh"
 _english = {value: key for key, value in ZH.items()}
 

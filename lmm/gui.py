@@ -258,6 +258,7 @@ class Window(ApplicationPages, QMainWindow):
             self.repo_note.setText(self.compatibility_text(self.last_metadata))
         self.refresh_installed(); self.refresh_downloads(); self.refresh_runtime(); self.refresh_app_update(); self.render_state()
         if hasattr(self, 'network_editor'): self.network_editor.refresh_language()
+        self.refresh_profiles()
         for i, title in enumerate(('Use global proxy','Direct','Custom proxy')): self.task_proxy.setItemText(i,tr(title))
         from .adapters import adapters
         for i, adapter in enumerate(adapters().values()): self.runtime_selector.setItemText(i,adapter.name + ('' if adapter.implemented else ' · '+tr('Reserved')))

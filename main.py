@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--apply-update",type=Path)
     parser.add_argument("--update-ack",type=Path)
     parser.add_argument("--setup-qwen",action="store_true")
+    parser.add_argument("--switch-model")
     parser.add_argument("--record-seconds",type=float)
     parser.add_argument("--test-audio",type=Path)
     parser.add_argument("--screenshot",type=Path)
@@ -60,6 +61,7 @@ def main():
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logging.getLogger("lmm").addHandler(handler); logging.getLogger("lmm").setLevel(logging.INFO)
         message={"action":"setup"} if options.setup_qwen else {"action":"record","seconds":options.record_seconds} if options.record_seconds else {"action":"test-audio","path":str(options.test_audio)} if options.test_audio else {"action":"show"}
+        if options.switch_model:message={'action':'switch-model','id':options.switch_model}
         instance=Instance(store.root,lambda incoming:window.external_action(incoming),message)
         if not instance.primary:
             return 0
@@ -68,7 +70,7 @@ def main():
         window.activate()
         app.aboutToQuit.connect(window.shutdown); app.aboutToQuit.connect(instance.close)
         if not (options.minimized or store.settings["start_minimized"]) or not window.tray.icon.isVisible():window.tray.show_window()
-        if options.setup_qwen or options.record_seconds or options.test_audio:QTimer.singleShot(800,lambda:window.external_action(message))
+        if options.setup_qwen or options.record_seconds or options.test_audio or options.switch_model:QTimer.singleShot(800,lambda:window.external_action(message))
         if options.update_ack:
             from lmm.updater import acknowledge
             ids=acknowledge(options.update_ack,store)

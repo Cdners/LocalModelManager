@@ -120,7 +120,7 @@ class ApplicationPages:
         actions=QHBoxLayout(); self.service_buttons={}
         for verb,title in [("start","Start service"),("stop","Stop"),("restart","Restart")]:
             button=bind(QPushButton(),title); button.setProperty("primary",verb=="start")
-            button.clicked.connect(lambda _,v=verb:self.service(v)); actions.addWidget(button); self.service_buttons[verb]=button
+            button.clicked.connect(lambda _,v=verb:self.use_selected_model() if v=='start' else self.service(v)); actions.addWidget(button); self.service_buttons[verb]=button
         box.addLayout(actions)
         actions=buttons(("New",self.new_profile),("Edit",self.edit_profile),("Clone",self.clone_profile),("Delete",self.delete_profile))
         for index in range(actions.count()-1):actions.itemAt(index).widget().setProperty("quiet",True)
@@ -153,6 +153,10 @@ class ApplicationPages:
         identity=selected or self.profile_combo.currentData() or self.store.settings.get("active_profile")
         self.profile_combo.blockSignals(True); self.profile_combo.clear()
         for profile in self.store.profiles:self.profile_combo.addItem(profile.name,profile.id)
+        configured={p.manifest_id or p.id for p in self.store.profiles}
+        for manifest in self.registry.entries.values():
+            if manifest['id'] not in configured:
+                self.profile_combo.addItem(manifest['name']+' · '+tr('Not configured'),'catalog:'+manifest['id'])
         index=self.profile_combo.findData(identity)
         if index>=0:self.profile_combo.setCurrentIndex(index)
         self.profile_combo.blockSignals(False); self.selected_profile()
@@ -167,6 +171,17 @@ class ApplicationPages:
         if profile and self.store.settings.get("active_profile")!=profile.id:
             self.store.settings["active_profile"]=profile.id; self.store.save()
         self.render_state()
+
+    def use_selected_model(self):
+        selected=self.profile_combo.currentData() or ''
+        if selected.startswith('catalog:'):
+            self.install_manifest(selected[8:],activate=True)
+        else:
+            from .adapters import get_adapter
+            profile=self.current_profile()
+            if profile and not get_adapter(profile.runtime_id).executable(self.store).exists() and (profile.manifest_id or profile.id) in self.registry.entries:
+                self.install_manifest(profile.manifest_id or profile.id,activate=True)
+            else:self.service('switch')
 
     def new_profile(self):
         dialog=ProfileDialog(self.store,parent=self)
@@ -199,7 +214,7 @@ class ApplicationPages:
     def service(self,verb,identity=None,done=None):
         profile=next((p for p in self.store.profiles if p.id==identity),None) if identity else self.current_profile()
         if not profile:self.error("Create a profile first."); return
-        if self.runtime_busy or self.model_update_busy:self.error("An update is in progress. Please wait."); return
+        if self.runtime_busy or self.model_update_busy or getattr(self,'switch_busy',False):self.error("An update is in progress. Please wait."); return
         identity=profile.id
         previous=self.profile_jobs.get(identity)
         if previous and self.jobs.items[previous]["state"]=="Running":
@@ -208,16 +223,20 @@ class ApplicationPages:
         self.profile_states[identity]={"state":"STOPPING" if verb=="stop" else "STARTING"}; self.render_state()
         def action(control,progress):
             control.check()
+            if verb=='switch':return self.manager.switch(identity,control,progress)
             if verb=="stop":self.manager.stop(identity); return {"state":"STOPPED"}
             if verb=="restart":self.manager.stop(identity)
             record=self.manager.start(identity)
             ready=api.wait_ready(profile,lambda:self.manager.is_running(identity),control=control,progress=progress)
             return record | ready
         def complete(value):
+            self.switch_busy=False
             self.profile_states[identity]=value; self.render_state()
             if done:done(value)
         def failure(message):
+            self.switch_busy=False
             self.statusBar().showMessage(message); self.error(message)
+        if verb=='switch':self.switch_busy=True
         self.profile_jobs[identity]=self.jobs.submit(verb+" · "+profile.name,action,complete,failure)
 
     def start_auto_profiles(self):
@@ -231,15 +250,24 @@ class ApplicationPages:
 
     def render_state(self):
         profile=self.current_profile()
+        selected=self.profile_combo.currentData() or ''
+        catalog=selected.startswith('catalog:')
         state=self.profile_states.get(profile.id,{}) if profile else {}
         text=state.get("state","STOPPED"); self.state_label.setText("●  "+tr(text))
         self.state_label.setStyleSheet("font-size:25px;font-weight:650;color:"+("#087f72" if text=="READY" else "#7a8996"))
         if profile:bind(self.profile_detail,"Port {port}  ·  PID {pid}  ·  {kind}",port=profile.port,pid=state.get("pid","—"),kind=profile.type.upper())
+        elif catalog:bind(self.profile_detail,'Install this model and its runtime, then switch the active service.')
         else:bind(self.profile_detail,"Create a profile to start your first model service.")
         busy=text in {"STARTING","STOPPING","LOADING MODEL"}
         for verb,button in self.service_buttons.items():
             allowed=(text in {"READY","RUNNING","STARTING","LOADING MODEL"}) if verb=="stop" else (not busy and (text not in {"READY","RUNNING"} if verb=="start" else text in {"READY","RUNNING"}))
             button.setEnabled(bool(profile) and allowed)
+        bind(self.service_buttons['start'],'Install and switch' if catalog else 'Switch to this model')
+        if catalog:
+            from .adapters import get_adapter
+            manifest=self.registry.entries[selected[8:]]
+            self.service_buttons['start'].setEnabled(get_adapter(manifest['runtime']['recommended']).implemented and not self.runtime_busy and not getattr(self,'switch_busy',False))
+            self.state_label.setText('●  '+tr('Not configured'))
         def mark(key):return tr("Passed") if state.get(key) else tr("Pending")
         bind(self.api_label,"Health {health}     Model list {models}     Transcription {transcription}",health=mark("health"),models=mark("models"),transcription=mark("transcription"))
         ids=state.get("model_ids",[]); ready=text=="READY"
@@ -334,6 +362,7 @@ class ApplicationPages:
     def refresh_catalog(self):
         self.catalog_selector.clear()
         for manifest in self.registry.entries.values():self.catalog_selector.addItem(manifest['name'],manifest['id'])
+        if hasattr(self,'profile_states') and hasattr(self,'log_source'):self.refresh_profiles()
 
     def import_manifest(self):
         filename,_=QFileDialog.getOpenFileName(self,tr('Import manifest'),'', 'Manifest (*.yaml *.yml *.json)')
@@ -343,18 +372,31 @@ class ApplicationPages:
             self.catalog_selector.setCurrentIndex(self.catalog_selector.findData(manifest['id']))
         except Exception as exc:self.error(str(exc))
 
-    def install_manifest(self, identity, setup=False):
+    def install_manifest(self, identity, setup=False, activate=False):
         from .sources import Sources
         from .adapters import get_adapter
         manifest=self.registry.entries[identity]
         adapter=get_adapter(manifest['runtime']['recommended']);runtime=Runtime(self.store,adapter)
+        if not adapter.implemented:self.statusBar().showMessage(tr('This runtime is planned, but not available yet.'));return
+        if self.runtime_busy:self.statusBar().showMessage(tr('A runtime operation is in progress.'));return
         source=manifest['source'];value=source.get('repo') if source['type']=='huggingface' else source.get('url') or source.get('path')
         if source['type']=='github' and not value:value='https://github.com/'+source['repo']+'/releases/latest'
         def download(metadata):
             if metadata.get('source')=='local':self.show_local_import(metadata,manifest);return
             roles=self.registry.select_files(manifest,metadata)
-            self.queue_download('model',manifest['name'],{'metadata':metadata,'filenames':list(roles.values()),'roles':roles,'manifest':manifest,'setup':setup})
-        def resolve_source(_=None):self.jobs.submit('Resolve source',lambda c,p:Sources(self.models).resolve(value,c),download,self.error)
+            self.queue_download('model',manifest['name'],{'metadata':metadata,'filenames':list(roles.values()),'roles':roles,'manifest':manifest,'setup':setup,'activate':activate})
+        def resolve_source(_=None):
+            receipts=[r for r in self.models.installed() if r.get('valid') and r.get('repo_id')==source.get('repo')]
+            if receipts:
+                # Reuse only a complete file-role set from one pinned revision.
+                for revision in sorted({r['revision'] for r in receipts},reverse=True):
+                    candidates=[r for r in receipts if r['revision']==revision]
+                    metadata={'repo_id':source.get('repo'),'revision':revision,'files':candidates}
+                    try:roles=self.registry.select_files(manifest,metadata)
+                    except ValueError:continue
+                    selected=[r for r in candidates if r['filename'] in roles.values()]
+                    self.offer_imported_profile(selected,{'metadata':metadata,'roles':roles,'manifest':manifest,'setup':setup,'activate':activate});return
+            self.jobs.submit('Resolve source',lambda c,p:Sources(self.models).resolve(value,c),download,self.error)
         if runtime.executable.exists():resolve_source()
         else:
             self.jobs.submit('Check for updates',runtime.check,
@@ -394,7 +436,8 @@ class ApplicationPages:
         identity=manifest['id'] if manifest else 'model-'+uuid.uuid4().hex[:8]
         if any(p.id==identity for p in self.store.profiles):
             self.refresh_profiles(identity)
-            if payload.get('setup'):self.service('start',identity,self.setup_ready)
+            self.nav.setCurrentRow(0)
+            if payload.get('setup') or payload.get('activate'):self.service('switch',identity,self.setup_ready if payload.get('setup') else None)
             return
         role_paths={role:next(r['path'] for r in receipts if r['filename']==name) for role,name in payload.get('roles',{}).items()}
         mmproj=role_paths.get('mmproj') or next((r['path'] for r in receipts if r['is_mmproj']), '')
@@ -403,12 +446,17 @@ class ApplicationPages:
             model_path=role_paths.get('model',mains[0]['path']),mmproj_path=mmproj,requires_mmproj=bool(mmproj),
             model_files=role_paths,manifest_id=manifest['id'] if manifest else '',
             runtime_options=manifest['runtime'].get('options',{}) if manifest else {})
-        if not payload.get('setup'):
+        previous=next((p for p in self.store.profiles if p.id==self.store.settings.get('active_profile') and p.type==profile.type),None)
+        if manifest and previous:
+            profile.host,profile.port=previous.host,previous.port
+            profile.compatibility_proxy,profile.proxy_port=previous.compatibility_proxy,previous.proxy_port
+        if not manifest:
             dialog=ProfileDialog(self.store,profile,self)
             if dialog.exec()!=QDialog.DialogCode.Accepted:return
             profile=dialog.profile
         self.store.put_profile(profile);self.refresh_profiles(profile.id)
-        if payload.get('setup'):self.service('start',profile.id,self.setup_ready)
+        self.nav.setCurrentRow(0)
+        if payload.get('setup') or payload.get('activate'):self.service('switch',profile.id,self.setup_ready if payload.get('setup') else None)
 
     def choose_new_task_proxy(self):
         value=self.task_proxy.currentData()
@@ -566,13 +614,21 @@ class ApplicationPages:
         self.pages['Runtime'].addWidget(self.runtime_selector)
         self.runtime_selector.currentIndexChanged.connect(self.select_runtime)
         box=self.card("Runtime"); box.addWidget(label("Engine information","section")); self.runtime_label=label(); box.addWidget(self.runtime_label)
-        box.addLayout(buttons(("Check for updates",self.check_runtime),("Download / Update",self.install_runtime),("Install downloaded version",self.install_staged_runtime)))
+        row=buttons(("Check for updates",self.check_runtime),("Download / Update",self.install_runtime),("Install downloaded version",self.install_staged_runtime))
+        self.runtime_buttons=[row.itemAt(i).widget() for i in range(3)];box.addLayout(row)
         self.pages["Runtime"].addWidget(label("The CUDA runtime is managed independently. Updates back up the engine, restart managed services, and roll back if health checks fail.","subtitle"))
         self.pages["Runtime"].addWidget(label("Runtime diagnostics","section"))
         self.runtime_details=QPlainTextEdit(); self.runtime_details.setReadOnly(True); self.runtime_details.setMinimumHeight(240); self.pages["Runtime"].addWidget(self.runtime_details)
         self.pages["Runtime"].addStretch()
 
     def refresh_runtime(self):
+        implemented=self.runtime.adapter.implemented
+        for index,button in enumerate(self.runtime_buttons):
+            button.setEnabled(implemented and not self.runtime_busy and (index!=2 or self.runtime.receipt('staged').exists()))
+        if not implemented:
+            self.runtime_label.setText(self.runtime.adapter.name+' · '+tr('Reserved'))
+            self.runtime_details.setPlainText(tr('This runtime is planned, but not available yet.'))
+            return
         installed=self.runtime.installed(); latest=self.runtime_latest
         present=self.runtime.executable.exists()
         text=tr("Installed: {binary}   ({release})\nLatest: {latest}\nBackend: {backend}",binary=installed.get("binary_tag","—"),release=installed.get("release_tag","—"),latest=latest.get("binary_tag",tr("Not checked")),backend=installed.get("backend",tr("CUDA not installed")))
@@ -583,6 +639,7 @@ class ApplicationPages:
 
     def check_runtime(self,auto=False,done=None):
         runtime=self.runtime
+        if not runtime.adapter.implemented:return
         def complete(release):
             self.mark_checked("runtime")
             if self.runtime.adapter.id==runtime.adapter.id:self.runtime_latest=release;self.refresh_runtime()
@@ -592,12 +649,14 @@ class ApplicationPages:
         self.jobs.submit("Check for updates",runtime.check,complete,self.background_error if auto else self.error)
 
     def install_runtime(self,done=None):
+        if not self.runtime.adapter.implemented:return
         if self.runtime_busy:self.statusBar().showMessage(tr("A runtime operation is in progress.")); return
         runtime=self.runtime
         self.check_runtime(done=lambda release:self.queue_download("runtime",runtime.adapter.name,{"adapter_id":runtime.adapter.id,"release":release,"install":True},done))
 
     def install_staged_runtime(self):
         runtime=self.runtime
+        if not runtime.adapter.implemented:return
         staged=read_json(self.runtime.receipt("staged"),{})
         if not staged:self.error("No verified runtime is ready to install."); return
         if self.runtime_busy:return
@@ -815,7 +874,13 @@ class ApplicationPages:
     def external_action(self,message):
         action=message.get("action","show")
         self.tray.show_window()
-        if action=="setup":self.setup_qwen()
+        if action=='switch-model':
+            identity=message.get('id','')
+            index=self.profile_combo.findData(identity)
+            if index<0:index=self.profile_combo.findData('catalog:'+identity)
+            if index<0:self.error('Create a profile first.');return
+            self.nav.setCurrentRow(0);self.profile_combo.setCurrentIndex(index);self.use_selected_model()
+        elif action=="setup":self.setup_qwen()
         elif action=="record":
             duration=max(1,min(300,float(message.get("seconds",10))))
             self.nav.setCurrentRow(4); self.start_recording()
