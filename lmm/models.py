@@ -7,14 +7,19 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
-from huggingface_hub import hf_hub_url
-from huggingface_hub.utils import validate_repo_id
-
 from .config import Store, atomic_json, read_json
 from .jobs import Control
-from .net import Downloader, request_json
+from .net import DownloadManager as Downloader, request_json, client
 
 RECOMMENDED_REPO = "ggml-org/Qwen3-ASR-1.7B-GGUF"
+
+def validate_repo_id(repo_id):
+    if not isinstance(repo_id,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}',repo_id) or '..' in repo_id or '--' in repo_id:
+        raise ValueError('Enter a Hugging Face repository as owner/name.')
+
+def hf_hub_url(repo_id, filename, revision='main'):
+    validate_repo_id(repo_id)
+    return 'https://huggingface.co/'+repo_id+'/resolve/'+quote(revision,safe='')+'/'+quote(filename,safe='/')
 
 
 def match_mmproj(filename: str, files: list[str]) -> str | None:
@@ -44,12 +49,15 @@ def model_metadata(data: dict) -> dict:
         path = PurePosixPath(name)
         if path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name:
             raise ValueError("Unsafe repository filename.")
-        if not name.lower().endswith(".gguf"): continue
+        if not name.lower().endswith(('.gguf','.safetensors','.bin','.pt','.pth','.onnx','.json','.txt','.model','.tiktoken')): continue
         lfs = item.get("lfs") or {}
         files.append({"filename": name, "size": lfs.get("size", item.get("size")),
                       "sha256": lfs.get("sha256") or lfs.get("oid"), "etag": lfs.get("sha256") or item.get("blobId"),
                       "is_mmproj": path.name.lower().startswith("mmproj")})
-    return {"repo_id": data.get("id", data.get("modelId")), "revision": revision, "files": files}
+    tasks={'automatic-speech-recognition':'asr','text-generation':'llm','feature-extraction':'embedding','image-text-to-text':'vision','text-to-speech':'tts','sentence-similarity':'embedding'}
+    return {"source_type":"huggingface", "repo_id": data.get("id", data.get("modelId")), "revision": revision, "files": files,
+            "tags":data.get('tags',[]), "card":data.get('cardData',{}), "task":tasks.get(data.get('pipeline_tag',''),''),
+            "architecture":(data.get('config') or {}).get('model_type','')}
 
 
 class Models:
@@ -64,12 +72,25 @@ class Models:
         return {"Authorization": f"Bearer {value}"} if value else {}
 
     def search(self, query, control):
-        return request_json("https://huggingface.co/api/models", control, params={"search": query, "filter": "gguf", "limit": 30}, headers=self.headers())
+        return request_json("https://huggingface.co/api/models", control, params={"search": query, "limit": 30}, headers=self.headers())
 
     def repository(self, repo_id, control, revision="main"):
         validate_repo_id(repo_id)
         data = request_json(f"https://huggingface.co/api/models/{repo_id}/revision/{quote(revision, safe='')}?blobs=true", control, headers=self.headers())
-        return model_metadata(data)
+        metadata=model_metadata(data)
+        # Documentation is evidence only. Never execute instructions from a card.
+        try:
+            with client(network=control.network) as session, session.stream('GET', hf_hub_url(repo_id,'README.md',revision=metadata['revision']),headers=self.headers()) as response:
+                if response.is_success:
+                    text=bytearray()
+                    for chunk in response.iter_bytes(8192):
+                        control.check();text.extend(chunk)
+                        if len(text)>256*1024:break
+                    metadata['card']=str(metadata['card'])+'\n'+text[:256*1024].decode('utf-8',errors='replace')
+        except Exception as exc:
+            from .jobs import Interrupted
+            if isinstance(exc,Interrupted):raise
+        return metadata
 
     def installed(self):
         records = read_json(self.index_path, [])
@@ -80,7 +101,7 @@ class Models:
 
     def download(self, metadata, filenames, control, progress=lambda _: None):
         repo = metadata["repo_id"]
-        validate_repo_id(repo)
+        if metadata.get('source_type','huggingface') == 'huggingface': validate_repo_id(repo)
         by_name = {f["filename"]: f for f in metadata["files"]}
         revision = metadata["revision"]
         root = self.store.models / repo.replace("/", "__") / revision[:12]
@@ -91,15 +112,16 @@ class Models:
             target = (root / filename).resolve()
             if not target.is_relative_to(root.resolve()): raise ValueError("Unsafe model path.")
             if not info["size"]: raise ValueError("Remote model size is missing.")
-            url = hf_hub_url(repo, filename, revision=revision)
+            url = info.get('url') or hf_hub_url(repo, filename, revision=revision)
             if target.exists() and not info.get("sha256"):
                 records = self.installed()
                 existing = next((r for r in records if r["path"] == self.store.relative(target) and r.get("valid")), None)
                 if not existing: raise ValueError("Unverified file already exists; choose another model directory.")
                 result = {"sha256": existing["sha256"], "size": existing["size"], "etag": existing.get("etag")}
             else:
-                result = Downloader().download(url, target, control, progress, info["size"], info.get("sha256"), self.headers(), info.get("etag"))
-            record = {"repo_id": repo, "filename": filename, "revision": revision,
+                headers = self.headers() if metadata.get('source_type','huggingface') == 'huggingface' else {}
+                result = Downloader().download(url, target, control, progress, info["size"], info.get("sha256"), headers, info.get("etag"))
+            record = {"source_type":metadata.get('source_type','huggingface'), "repo_id": repo, "filename": filename, "revision": revision,
                       "etag": info.get("etag") or result.get("etag"), "size": result["size"],
                       "sha256": result["sha256"], "downloaded_at": datetime.now(timezone.utc).isoformat(),
                       "path": self.store.relative(target), "is_mmproj": info["is_mmproj"], "status": "complete"}
@@ -112,7 +134,7 @@ class Models:
         return receipts
 
     def check_updates(self, control, progress=lambda _: None):
-        records = [r for r in self.installed() if r["valid"]]
+        records = [r for r in self.installed() if r["valid"] and r.get('source_type','huggingface') == 'huggingface']
         results = []
         for repo in sorted({r["repo_id"] for r in records}):
             control.check()

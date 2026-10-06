@@ -13,6 +13,10 @@ def main():
     parser.add_argument("--root", type=Path)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--supervise", type=Path)
+    parser.add_argument("--adapter-service")
+    parser.add_argument("--runtime-probe")
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--probe-output", type=Path)
     parser.add_argument("--apply-update",type=Path)
     parser.add_argument("--update-ack",type=Path)
     parser.add_argument("--setup-qwen",action="store_true")
@@ -20,6 +24,20 @@ def main():
     parser.add_argument("--test-audio",type=Path)
     parser.add_argument("--screenshot",type=Path)
     options = parser.parse_args()
+    if options.runtime_probe:
+        from lmm.transcribe_service import load_binding
+        module = load_binding(options.runtime_root)
+        devices = str(module.backends())
+        if options.probe_output:
+            from lmm.config import atomic_json
+            atomic_json(options.probe_output, {'devices':devices})
+        elif sys.stdout: print(devices)
+        return 0
+    if options.adapter_service:
+        from lmm.config import Store
+        from lmm.transcribe_service import serve
+        serve(Store(options.root), options.adapter_service)
+        return 0
     if options.supervise:
         from lmm.processes import supervise
         return supervise(options.supervise)

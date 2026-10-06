@@ -50,11 +50,17 @@ class Profile:
     requires_mmproj: bool = True
     compatibility_proxy: bool = False
     proxy_port: int = 8001
+    runtime_id: str = "llama_cpp"
+    manifest_id: str = ""
+    architecture: str = ""
+    backend: str = "cuda"
+    runtime_options: dict = field(default_factory=dict)
+    model_files: dict[str, str] = field(default_factory=dict)
 
     def validate(self) -> None:
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}", self.id):
             raise ValueError("Profile ID must contain only letters, numbers, - and _.")
-        if not self.name.strip() or self.type not in {"asr", "llm", "vision"}:
+        if not self.name.strip() or self.type not in {"asr", "llm", "vision", "embedding", "reranker", "tts"}:
             raise ValueError("A name and a supported model type are required.")
         if not 1 <= self.port <= 65535 or not 1 <= self.proxy_port <= 65535:
             raise ValueError("Ports must be between 1 and 65535.")
@@ -64,6 +70,11 @@ class Profile:
             raise ValueError("Invalid parallel slots or GPU layers.")
         if not self.host or any(c.isspace() for c in self.host) or "," in self.host:
             raise ValueError("Enter one host address.")
+        if self.runtime_id and not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.runtime_id):
+            raise ValueError("Invalid runtime adapter ID.")
+        if self.backend not in {"cuda", "cpu", "vulkan", "auto"}: raise ValueError("Unsupported backend.")
+        if not isinstance(self.runtime_options, dict) or not isinstance(self.model_files, dict):
+            raise ValueError("Runtime options and model files must be objects.")
         reserved = {"--host", "--port", "-m", "--model", "--mmproj", "-mm", "--models-dir", "--models-preset", "--models-max"}
         if any(str(arg).split("=", 1)[0] in reserved for arg in self.extra_args):
             raise ValueError("Use the dedicated model/host/port fields; router mode is not supported.")
@@ -78,6 +89,7 @@ class Profile:
 
 
 DEFAULTS = {
+    "download_proxy": {"mode": "system"}, "runtime_paths": {},
     "language": "zh", "models_dir": "models", "runtime_dir": "runtime/llama.cpp",
     "logs_dir": "logs", "start_with_windows": False, "start_minimized": False,
     "minimize_to_tray": True, "close_to_tray": True, "start_profiles": False,

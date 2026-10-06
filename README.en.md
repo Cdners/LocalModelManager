@@ -2,7 +2,13 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-A native Windows desktop manager for local llama.cpp services, built with Python 3.12 and PySide6. Manage CUDA runtimes, GGUF models, multiple service profiles, and local speech recognition from one portable workspace.
+A native Windows local AI runtime manager built with Python 3.12 and PySide6. Models are independent of inference runtimes, with manifest-based registration, a shared downloader, per-engine services, and configurable proxies.
+
+## 0.3.0 architecture upgrade
+
+llama.cpp, audio.cpp, and transcribe.cpp are implemented; five additional adapters are explicitly reserved. Import models through YAML/JSON manifests, Hugging Face repositories/URLs, GitHub Releases, HTTP(S), or local files/directories. Unknown GGUF files require an explicit runtime selection. Existing Qwen profiles remain compatible.
+
+Configure Direct, System, HTTP, HTTPS, SOCKS5 or SOCKS5H under **Settings → Network**, with per-download overrides. See [architecture, capabilities and limits](docs/architecture.md) and the [importable manifest example](docs/examples/fun-asr-nano.yaml).
 
 ## Why this exists
 
@@ -12,11 +18,11 @@ Download the Windows x64 package from [Releases](https://github.com/Cdners/Local
 
 ## Interface and languages
 
-Version 0.2.0 includes English and Simplified Chinese. Choose **Settings → General → Language**. The interface updates and saves the language immediately without restarting model services. Other settings are applied with **Save settings**.
+Version 0.3.0 includes English and Simplified Chinese. Choose **Settings → General → Language**. The interface updates and saves the language immediately without restarting model services. Other settings are applied with **Save settings**.
 
 Navigation, controls, service states, tables, profile dialogs, and the tray menu follow the selected language. Model IDs, paths, user input, transcripts, and original logs retain their contents.
 
-The overview groups the active service, GPU usage, and application connection details. Settings are organized into General, Storage & services, and Updates & access. GPU memory usage includes other applications.
+The overview groups the active service, GPU usage, and application connection details. Settings are organized into General, Storage & services, Updates & access, and Network. GPU memory usage includes other applications.
 
 ## Requirements and installation
 
@@ -24,7 +30,7 @@ The overview groups the active service, GPU usage, and application connection de
 - An application directory that your Windows account can write to.
 - Network access to download runtimes and models; inference runs locally once installed.
 
-Extract the complete release ZIP and open `LocalModelManager.exe`. Keep the `app/` directory beside it. The release package does not include models or the llama.cpp runtime.
+Extract the complete release ZIP and open `LocalModelManager.exe`. Keep the `app/` directory beside it. The release package does not include models or runtime binaries.
 
 Runtime, models, configuration, downloads, and logs are stored alongside the application by default. Move the whole portable directory to retain relative paths. Changing a configured storage directory does not move existing data.
 
@@ -60,7 +66,7 @@ uv pip install --python .venv\Scripts\python.exe -r pyproject.toml --extra build
 .\.venv\Scripts\python.exe main.py
 ```
 
-Dependencies: PySide6, httpx, huggingface_hub, nvidia-ml-py, packaging, psutil, and truststore. Build dependencies: PyInstaller and pytest. Audio conversion currently uses Python 3.12's `audioop`; Python 3.13 is not supported yet.
+Dependencies: PySide6, httpx[socks], PyYAML, nvidia-ml-py, packaging, psutil, and truststore. Build dependencies: PyInstaller and pytest. Audio conversion currently uses Python 3.12's `audioop`; Python 3.13 is not supported yet.
 
 ```powershell
 .\build.ps1

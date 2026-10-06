@@ -1,0 +1,5 @@
+[
+  {"id":"qwen3-asr-17b-q8","name":"Qwen3-ASR 1.7B Q8_0","task":"asr","source":{"type":"huggingface","repo":"ggml-org/Qwen3-ASR-1.7B-GGUF"},"runtime":{"recommended":"llama_cpp"},"files":{"model":{"pattern":"Qwen3-ASR-1.7B-Q8_0.gguf"},"mmproj":{"pattern":"mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"}},"api":{"protocol":"openai","endpoint":"/v1/audio/transcriptions"}},
+  {"id":"fun-asr-nano-2512","name":"Fun-ASR Nano 2512 Q8_0 (audio.cpp)","task":"asr","source":{"type":"huggingface","repo":"FunAudioLLM/Fun-ASR-Nano-2512-GGUF"},"runtime":{"recommended":"audio_cpp","options":{"family":"fun_asr_nano"}},"files":{"model":{"pattern":"*q8_0.gguf"}},"api":{"protocol":"openai","endpoint":"/v1/audio/transcriptions"}},
+  {"id":"fun-asr-nano-handy","name":"Fun-ASR Nano 2512 Q8_0 (transcribe.cpp)","task":"asr","source":{"type":"huggingface","repo":"handy-computer/fun-asr-nano-2512-gguf"},"runtime":{"recommended":"transcribe_cpp"},"files":{"model":{"pattern":"*Q8_0.gguf"}},"api":{"protocol":"openai","endpoint":"/v1/audio/transcriptions"}}
+]

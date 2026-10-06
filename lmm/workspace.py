@@ -65,6 +65,10 @@ def table(headers):
 
 class ApplicationPages:
     def build_workspace(self):
+        from .network import configure
+        from .registry import ModelRegistry
+        configure(self.store)
+        self.registry=ModelRegistry(self.store)
         self.manager=Manager(self.store); self.runtime=Runtime(self.store)
         self.tokens=TokenStore(self.store); self.models=Models(self.store,self.tokens.get)
         self.downloads=Downloads(self.store); self.download_jobs={}; self.download_callbacks={}
@@ -89,7 +93,10 @@ class ApplicationPages:
         self.timer.start(); self.tick()
         def recover(control,progress):
             if self.store.settings["start_with_windows"]:set_autostart(True,self.store.root)
-            self.runtime.recover(self.manager); self.models.recover(self.manager)
+            from .adapters import adapters
+            for adapter in adapters().values():
+                if adapter.implemented:Runtime(self.store,adapter).recover(self.manager)
+            self.models.recover(self.manager)
         def restored(_):
             self.refresh_profiles()
             resume=read_json(self.store.config/"resume_profiles.json",[])
@@ -253,25 +260,24 @@ class ApplicationPages:
         else:self.error("No model ID has been returned by /v1/models yet.")
 
     def build_models(self):
-        box=self.card("Models"); box.addWidget(label("Recommended for speech","subtitle")); box.addWidget(label("Qwen3-ASR-1.7B","section"))
-        box.addWidget(label("Q8_0 · Recommended for 8 GB GPUs\nModel 2.17 GB + MMProj 356 MB"))
-        box.addWidget(label("BF16 uses more memory: model 4.07 GB + MMProj 642 MB.","subtitle"))
-        box.addLayout(buttons(("Download Q8_0",lambda:self.recommended("Q8_0")),("Download BF16",lambda:self.recommended("bf16"))))
-        self.repo_input=QLineEdit(RECOMMENDED_REPO); bind(self.repo_input,"Repository or search keywords",setter="setPlaceholderText")
+        box=self.card("Models"); box.addWidget(label("Model Registry","section"))
+        self.catalog_selector=QComboBox();self.refresh_catalog();box.addWidget(self.catalog_selector)
+        box.addLayout(buttons(("Download and configure",lambda:self.install_manifest(self.catalog_selector.currentData())),("Import manifest",self.import_manifest)))
+        self.repo_input=QLineEdit(RECOMMENDED_REPO); bind(self.repo_input,"Model source / search keywords",setter="setPlaceholderText")
         self.pages["Models"].addWidget(self.repo_input)
-        self.pages["Models"].addLayout(buttons(("Load repository",self.load_repo),("Search Hugging Face",self.search_models),("Import local GGUF",self.new_profile)))
+        self.pages["Models"].addLayout(buttons(("Resolve source",self.load_repo),("Search Hugging Face",self.search_models),("Local file",lambda:self.import_local(False)),("Local directory",lambda:self.import_local(True))))
         self.search_results=QListWidget(); self.search_results.setMaximumHeight(130); self.search_results.hide()
         self.search_results.itemActivated.connect(lambda item:(self.repo_input.setText(item.text()),self.load_repo()))
         self.pages["Models"].addWidget(self.search_results)
         self.repo_note=label(); self.pages["Models"].addWidget(self.repo_note)
-        self.repo_table=table(["Select","GGUF file","Size","Type"]); self.repo_table.itemChanged.connect(self.match_selected)
+        self.repo_table=table(["Select","Model file","Size","Type"]); self.repo_table.itemChanged.connect(self.match_selected)
         self.repo_table.hide()
         self.pages["Models"].addWidget(self.repo_table)
         self.download_selected_button=bind(QPushButton(),"Download selected"); self.download_selected_button.clicked.connect(self.download_selected); self.download_selected_button.hide()
         self.pages["Models"].addWidget(self.download_selected_button,0,Qt.AlignmentFlag.AlignLeft)
         self.pages["Models"].addWidget(label("Installed models","section"))
         self.installed_table=table(["Model","Size","Revision","Status"]); self.pages["Models"].addWidget(self.installed_table)
-        self.models_empty=label("No models installed yet. Download a recommended model or import a local GGUF.","subtitle"); self.pages["Models"].addWidget(self.models_empty)
+        self.models_empty=label("No models installed yet. Import a model source or choose a catalog entry.","subtitle"); self.pages["Models"].addWidget(self.models_empty)
         self.model_update_label=label(); self.pages["Models"].addWidget(self.model_update_label)
         self.pages["Models"].addLayout(buttons(("Check model updates",self.check_model_updates),("Apply model updates",self.update_models),("Open model folder",lambda:QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.models))))))
 
@@ -279,12 +285,16 @@ class ApplicationPages:
         query=self.repo_input.text().strip()
         def complete(results):
             self.search_results.clear(); self.search_results.addItems([r.get("id",r.get("modelId","")) for r in results]); self.search_results.show()
-            bind(self.repo_note,"Double-click a result to list its GGUF files." if results else "No matching GGUF repositories found.")
+            bind(self.repo_note,"Double-click a result to list its model files." if results else "No matching model repositories found.")
         self.jobs.submit("Search Hugging Face",lambda c,p:self.models.search(query,c),complete,self.error)
 
     def load_repo(self):
         repo=self.repo_input.text().strip()
-        self.jobs.submit("Load repository · "+repo,lambda c,p:self.models.repository(repo,c),self.show_repo,self.error)
+        from .sources import Sources
+        def complete(metadata):
+            if metadata.get('source')=='local':self.show_local_import(metadata)
+            else:self.show_repo(metadata)
+        self.jobs.submit("Resolve source",lambda c,p:Sources(self.models).resolve(repo,c),complete,self.error)
 
     def show_repo(self,metadata):
         self.repo_table.show(); self.download_selected_button.show()
@@ -294,6 +304,18 @@ class ApplicationPages:
             self.repo_table.setItem(row,0,check)
             for col,value in enumerate([item["filename"],size(item["size"]),"MMProj" if item["is_mmproj"] else tr("Model")],1):self.repo_table.setItem(row,col,QTableWidgetItem(value))
         self.repo_table.blockSignals(False); bind(self.repo_note,"Revision {revision} · Matching MMProj files are selected automatically.",revision=metadata["revision"][:12])
+        self.repo_note.setText(self.compatibility_text(metadata))
+        for i, item in enumerate(metadata['files']):
+            if item['filename'] in metadata.get('suggested_files',[]):self.repo_table.item(i,0).setCheckState(Qt.CheckState.Checked)
+
+    def compatibility_text(self,metadata):
+        matches=self.registry.match(metadata)
+        task=metadata.get('task') or (matches[0]['task'] if matches else tr('Unknown'))
+        rows=self.registry.compatibility(metadata)
+        details=[tr('Task')+': '+task, tr('Architecture')+': '+(metadata.get('architecture') or tr('Unknown')),
+                 tr('Format')+': '+(metadata.get('format') or ', '.join(sorted({Path(f['filename']).suffix.lstrip('.') for f in metadata['files']})))]
+        if metadata.get('quantization'):details.append(metadata['quantization'])
+        return ' · '.join(details)+'\n'+tr('Compatible runtime')+'\n'+'\n'.join({'compatible':'✓ ','incompatible':'✗ ','unknown':'? '}[r['status']]+r['name']+(' — '+tr('Recommended') if r['recommended'] else '') for r in rows)
 
     def match_selected(self,item):
         if item.column()!=0 or item.checkState()!=Qt.CheckState.Checked or not self.last_metadata:return
@@ -302,48 +324,131 @@ class ApplicationPages:
         filenames=[f["filename"] for f in self.last_metadata["files"]]
         matched=match_mmproj(info["filename"],filenames)
         if matched:self.repo_table.item(filenames.index(matched),0).setCheckState(Qt.CheckState.Checked)
-        else:bind(self.repo_note,"No matching MMProj found. Check the model requirements; LLMs usually do not need one.")
 
     def download_selected(self):
         if not self.last_metadata:return
         selected=[f["filename"] for i,f in enumerate(self.last_metadata["files"]) if self.repo_table.item(i,0).checkState()==Qt.CheckState.Checked]
-        if not selected:self.error("Select at least one GGUF file."); return
+        if not selected:self.error("Select at least one model file."); return
         self.queue_download("model","Download models",{"metadata":self.last_metadata,"filenames":selected})
 
-    def recommended(self,quant="Q8_0",setup=False):
-        def complete(metadata):
-            self.show_repo(metadata)
-            main=f"Qwen3-ASR-1.7B-{quant}.gguf"; matched=match_mmproj(main,[f["filename"] for f in metadata["files"]])
-            if not matched:self.error("The official repository did not return a matching MMProj."); return
-            self.queue_download("model","Qwen3 ASR · "+quant,{"metadata":metadata,"filenames":[main,matched],"setup":setup})
-        self.jobs.submit("Read Qwen3 ASR repository",lambda c,p:self.models.repository(RECOMMENDED_REPO,c),complete,self.error)
+    def refresh_catalog(self):
+        self.catalog_selector.clear()
+        for manifest in self.registry.entries.values():self.catalog_selector.addItem(manifest['name'],manifest['id'])
+
+    def import_manifest(self):
+        filename,_=QFileDialog.getOpenFileName(self,tr('Import manifest'),'', 'Manifest (*.yaml *.yml *.json)')
+        if not filename:return
+        try:
+            manifest=self.registry.import_file(filename);self.refresh_catalog()
+            self.catalog_selector.setCurrentIndex(self.catalog_selector.findData(manifest['id']))
+        except Exception as exc:self.error(str(exc))
+
+    def install_manifest(self, identity, setup=False):
+        from .sources import Sources
+        from .adapters import get_adapter
+        manifest=self.registry.entries[identity]
+        adapter=get_adapter(manifest['runtime']['recommended']);runtime=Runtime(self.store,adapter)
+        source=manifest['source'];value=source.get('repo') if source['type']=='huggingface' else source.get('url') or source.get('path')
+        if source['type']=='github' and not value:value='https://github.com/'+source['repo']+'/releases/latest'
+        def download(metadata):
+            if metadata.get('source')=='local':self.show_local_import(metadata,manifest);return
+            roles=self.registry.select_files(manifest,metadata)
+            self.queue_download('model',manifest['name'],{'metadata':metadata,'filenames':list(roles.values()),'roles':roles,'manifest':manifest,'setup':setup})
+        def resolve_source(_=None):self.jobs.submit('Resolve source',lambda c,p:Sources(self.models).resolve(value,c),download,self.error)
+        if runtime.executable.exists():resolve_source()
+        else:
+            self.jobs.submit('Check for updates',runtime.check,
+                lambda release:self.queue_download('runtime',adapter.name,{'adapter_id':adapter.id,'release':release,'install':True},resolve_source),self.error)
+
+    def import_local(self, directory=False):
+        filename=QFileDialog.getExistingDirectory(self,tr('Local directory'),str(self.store.models)) if directory else QFileDialog.getOpenFileName(self,tr('Local file'),str(self.store.models),'All files (*)')[0]
+        if filename:
+            from .registry import inspect_local
+            self.jobs.submit('Inspect local model',lambda c,p:inspect_local(filename),self.show_local_import,self.error)
+
+    def show_local_import(self,metadata,manifest=None):
+        if manifest is None:
+            matches=self.registry.match(metadata)
+            if len(matches)==1:manifest=matches[0]
+        rows=self.registry.compatibility(metadata);runtime=next((r['id'] for r in rows if r['recommended']), '')
+        profile=Profile('model-'+uuid.uuid4().hex[:8],Path(metadata['path']).stem,
+            type=manifest['task'] if manifest else (metadata.get('task') or 'asr'),model_path=self.store.relative(Path(metadata['path'])),
+            runtime_id=manifest['runtime']['recommended'] if manifest else runtime, requires_mmproj=False,
+            architecture=metadata.get('architecture',''), runtime_options=manifest['runtime'].get('options',{}) if manifest else {})
+        dialog=ProfileDialog(self.store,profile,self)
+        dialog.content_layout.insertWidget(0,label(self.compatibility_text(metadata),'subtitle'))
+        dialog.setWindowTitle(tr('Model profile')+' · '+metadata.get('format','')+' · '+metadata.get('quantization','')+' · '+size(metadata['size']))
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            self.store.put_profile(dialog.profile);self.refresh_profiles(dialog.profile.id);self.refresh_installed()
+
+    def offer_imported_profile(self,receipts,payload):
+        self.refresh_installed()
+        mains=[r for r in receipts if not r['is_mmproj']]
+        if not mains:return
+        manifest=payload.get('manifest')
+        if not manifest:
+            import fnmatch
+            matches=[m for m in self.registry.match(payload['metadata']) if fnmatch.fnmatch(mains[0]['filename'].lower(),m['files']['model']['pattern'].lower())]
+            manifest=matches[0] if len(matches)==1 else None
+        runtime=manifest['runtime']['recommended'] if manifest else next((r['id'] for r in self.registry.compatibility(payload['metadata']) if r['recommended']), '')
+        identity=manifest['id'] if manifest else 'model-'+uuid.uuid4().hex[:8]
+        if any(p.id==identity for p in self.store.profiles):
+            self.refresh_profiles(identity)
+            if payload.get('setup'):self.service('start',identity,self.setup_ready)
+            return
+        role_paths={role:next(r['path'] for r in receipts if r['filename']==name) for role,name in payload.get('roles',{}).items()}
+        mmproj=role_paths.get('mmproj') or next((r['path'] for r in receipts if r['is_mmproj']), '')
+        profile=Profile(identity,manifest['name'] if manifest else Path(mains[0]['filename']).stem,
+            type=manifest['task'] if manifest else (payload['metadata'].get('task') or 'asr'),runtime_id=runtime,
+            model_path=role_paths.get('model',mains[0]['path']),mmproj_path=mmproj,requires_mmproj=bool(mmproj),
+            model_files=role_paths,manifest_id=manifest['id'] if manifest else '',
+            runtime_options=manifest['runtime'].get('options',{}) if manifest else {})
+        if not payload.get('setup'):
+            dialog=ProfileDialog(self.store,profile,self)
+            if dialog.exec()!=QDialog.DialogCode.Accepted:return
+            profile=dialog.profile
+        self.store.put_profile(profile);self.refresh_profiles(profile.id)
+        if payload.get('setup'):self.service('start',profile.id,self.setup_ready)
+
+    def choose_new_task_proxy(self):
+        value=self.task_proxy.currentData()
+        if value!='custom':self.download_policy={'mode':value};return
+        from .network_ui import ProxyDialog
+        dialog=ProxyDialog(self.store,self.download_policy,self)
+        if dialog.exec()==QDialog.DialogCode.Accepted:self.download_policy=dialog.value
+        else:self.task_proxy.setCurrentIndex(0)
+
+    def edit_download_proxy(self):
+        from .network_ui import ProxyDialog
+        row=self.download_table.currentRow()
+        if row<0:return
+        record=self.downloads.records[row]
+        if record['state'] in {'Running','Queued','Pausing'}:self.error('Pause the task before changing its proxy.');return
+        dialog=ProxyDialog(self.store,record.get('proxy',{'mode':'global'}),self)
+        if dialog.exec()==QDialog.DialogCode.Accepted:
+            record['proxy']=dialog.value;self.downloads.save()
+
+    def select_runtime(self):
+        from .adapters import get_adapter
+        self.runtime=Runtime(self.store,get_adapter(self.runtime_selector.currentData()))
+        self.runtime_latest=read_json(self.runtime.receipt('latest'),{})
+        self.refresh_runtime()
 
     def refresh_installed(self):
-        records=self.models.installed(); self.installed_table.setRowCount(len(records))
+        records=self.models.installed()
+        known={str(self.store.path(r['path'])) for r in records}
+        for profile in self.store.profiles:
+            path=self.store.path(profile.model_path)
+            if not profile.model_path or str(path) in known:continue
+            known.add(str(path))
+            records.append({'filename':path.name,'path':profile.model_path,'size':path.stat().st_size if path.is_file() else None,
+                            'revision':'local','valid':path.exists()})
+        self.installed_table.setRowCount(len(records))
         self.models_empty.setVisible(not records)
         updates={(u["record"]["path"]):u["status"] for u in self.model_updates}
         for row,record in enumerate(records):
             values=[record["filename"],size(record["size"]),record["revision"][:12],tr(updates.get(record["path"],"Installed") if record["valid"] else "Missing / incomplete")]
             for col,value in enumerate(values):self.installed_table.setItem(row,col,QTableWidgetItem(value))
-
-    def offer_profile(self,receipts,setup=False):
-        self.refresh_installed()
-        mains=[r for r in receipts if not r["is_mmproj"]]
-        if not mains:return
-        main=mains[0]
-        if main["repo_id"]!=RECOMMENDED_REPO:return
-        if not setup and QMessageBox.question(self,"Create profile","Create a profile from the downloaded model?")!=QMessageBox.StandardButton.Yes:return
-        identity="qwen3-asr-17b-q8" if "Q8_0" in main["filename"] else "qwen3-asr-17b-bf16"
-        if any(p.id==identity for p in self.store.profiles):
-            self.refresh_profiles(identity)
-            if setup:self.service("start",identity,self.setup_ready)
-            return
-        mmproj=next((r for r in receipts if r["is_mmproj"]),None)
-        if not mmproj:self.error("The main model is downloaded, but MMProj is incomplete."); return
-        profile=Profile(identity,"Qwen3 ASR 1.7B "+("Q8" if "Q8_0" in main["filename"] else "BF16"),
-            model_path=main["path"],mmproj_path=mmproj["path"],auto_start=True)
-        self.store.put_profile(profile); self.refresh_profiles(identity)
-        if setup:self.service("start",identity,self.setup_ready)
 
     def check_model_updates(self,auto=False):
         def complete(results):
@@ -367,19 +472,26 @@ class ApplicationPages:
             self.queue_download("model","Apply model updates · "+repo,{"metadata":metadata,"filenames":sorted(names),"replace":old})
 
     def build_downloads(self):
+        self.download_policy={'mode':'global'}
+        self.task_proxy=QComboBox()
+        for title,value in [('Use global proxy','global'),('Direct','direct'),('Custom proxy','custom')]:self.task_proxy.addItem(tr(title),value)
+        self.task_proxy.currentIndexChanged.connect(self.choose_new_task_proxy)
+        self.pages['Downloads'].addWidget(label('Proxy for new downloads','subtitle'))
+        self.pages['Downloads'].addWidget(self.task_proxy)
         empty=self.card("Downloads"); self.downloads_empty=empty.parentWidget(); self.downloads_empty.setMinimumHeight(210)
         empty.addStretch(); empty.addWidget(label("No downloads yet","section"))
         empty.addWidget(label("Choose a model or runtime to start your first download.","subtitle"))
         empty.addLayout(buttons(("Model library",lambda:self.nav.setCurrentRow(1)),("Runtime",lambda:self.nav.setCurrentRow(3)))); empty.addStretch()
         self.download_table=table(["Task / File","State","Progress","Downloaded","Speed","ETA / Detail"])
         self.download_table.setMinimumHeight(360); self.pages["Downloads"].addWidget(self.download_table)
-        self.download_toolbar=QWidget(); self.download_toolbar.setLayout(buttons(("Pause",lambda:self.download_action("pause")),("Resume / Retry",lambda:self.download_action("resume")),("Cancel",lambda:self.download_action("cancel"))))
+        self.download_toolbar=QWidget(); self.download_toolbar.setLayout(buttons(("Pause",lambda:self.download_action("pause")),("Resume / Retry",lambda:self.download_action("resume")),("Cancel",lambda:self.download_action("cancel")),("Download proxy",self.edit_download_proxy)))
         self.download_toolbar.layout().setContentsMargins(0,0,0,0); self.pages["Downloads"].addWidget(self.download_toolbar)
         self.pages["Downloads"].addWidget(label("Resumable downloads. Unfinished tasks can be continued after restarting the app.","subtitle"))
         self.pages["Downloads"].addStretch()
 
     def queue_download(self,kind,title,payload,done=None):
         record=self.downloads.add(kind,title,payload)
+        if 'proxy' not in record:record['proxy']=dict(self.download_policy);self.downloads.save()
         if done:self.download_callbacks[record["id"]]=done
         self.run_download(record); self.nav.setCurrentRow(2)
 
@@ -391,10 +503,12 @@ class ApplicationPages:
         if kind=="runtime":self.runtime_busy=True
         self.downloads.update(record["id"],{"state":"Running","error":""})
         def work(control,progress):
+            control.network=record.get('proxy',{'mode':'global'})
+            runtime=Runtime(self.store, __import__('lmm.adapters',fromlist=['get_adapter']).get_adapter(payload.get('adapter_id','llama_cpp')))
             if kind=="runtime":
-                stage=self.runtime.stage(payload["release"],control,progress)
+                stage=runtime.stage(payload["release"],control,progress)
                 if payload.get("install"):
-                    with self.manager.lock:return self.runtime.install(stage,control,self.manager.stop_all,self.manager.start_many,self.manager.wait_ready_many)
+                    with self.manager.lock:return runtime.install(stage,control,lambda:self.manager.stop_runtime(runtime.adapter.id),self.manager.start_many,self.manager.wait_ready_many)
                 return str(stage)
             if kind=="model":
                 result=self.models.download(payload["metadata"],payload["filenames"],control,progress)
@@ -406,7 +520,7 @@ class ApplicationPages:
         def complete(result):
             if kind=="runtime":self.runtime_busy=False; self.refresh_runtime()
             self.downloads.update(record["id"],{"state":"Completed"}); self.refresh_downloads()
-            if kind=="model" and not payload.get("replace"):self.offer_profile(result,payload.get("setup",False))
+            if kind=="model" and not payload.get("replace"):self.offer_imported_profile(result,payload)
             if kind=="model" and payload.get("replace"):self.check_model_updates()
             if kind=="app":self.refresh_app_update()
             callback=self.download_callbacks.pop(record["id"],None)
@@ -446,6 +560,11 @@ class ApplicationPages:
         self.model_update_busy=any(r["kind"]=="model" and r["payload"].get("replace") and r["state"] in {"Running","Pausing"} for r in self.downloads.records)
 
     def build_runtime(self):
+        from .adapters import adapters
+        self.runtime_selector=QComboBox()
+        for adapter in adapters().values():self.runtime_selector.addItem(adapter.name + ('' if adapter.implemented else ' · '+tr('Reserved')),adapter.id)
+        self.pages['Runtime'].addWidget(self.runtime_selector)
+        self.runtime_selector.currentIndexChanged.connect(self.select_runtime)
         box=self.card("Runtime"); box.addWidget(label("Engine information","section")); self.runtime_label=label(); box.addWidget(self.runtime_label)
         box.addLayout(buttons(("Check for updates",self.check_runtime),("Download / Update",self.install_runtime),("Install downloaded version",self.install_staged_runtime)))
         self.pages["Runtime"].addWidget(label("The CUDA runtime is managed independently. Updates back up the engine, restart managed services, and roll back if health checks fail.","subtitle"))
@@ -457,37 +576,40 @@ class ApplicationPages:
         installed=self.runtime.installed(); latest=self.runtime_latest
         present=self.runtime.executable.exists()
         text=tr("Installed: {binary}   ({release})\nLatest: {latest}\nBackend: {backend}",binary=installed.get("binary_tag","—"),release=installed.get("release_tag","—"),latest=latest.get("binary_tag",tr("Not checked")),backend=installed.get("backend",tr("CUDA not installed")))
-        if not present:text=tr("llama.cpp is not installed")+"\n"+text
+        if not present:text=self.runtime.adapter.name+" · "+tr("Not installed")+"\n"+text
         elif latest:text+="\n"+tr("Status: {status}",status=tr("Up to date" if latest.get("binary_tag")==installed.get("binary_tag") else "Update available"))
         self.runtime_label.setText(text)
-        self.runtime_details.setPlainText(installed.get("version","")+"\n"+installed.get("devices","")+"\n"+str(self.store.runtime))
+        self.runtime_details.setPlainText(installed.get("version","")+"\n"+installed.get("devices","")+"\n"+str(self.runtime.directory))
 
     def check_runtime(self,auto=False,done=None):
+        runtime=self.runtime
         def complete(release):
-            self.runtime_latest=release; self.mark_checked("runtime"); self.refresh_runtime()
+            self.mark_checked("runtime")
+            if self.runtime.adapter.id==runtime.adapter.id:self.runtime_latest=release;self.refresh_runtime()
             if done:done(release)
-            elif auto and self.store.settings["runtime_download"] and release["binary_tag"]!=self.runtime.installed().get("binary_tag"):
-                self.queue_download("runtime","llama.cpp CUDA",{"release":release,"install":self.store.settings["runtime_install"]})
-        self.jobs.submit("Check for updates",self.runtime.check,complete,self.background_error if auto else self.error)
+            elif auto and self.store.settings["runtime_download"] and release["binary_tag"]!=runtime.installed().get("binary_tag"):
+                self.queue_download("runtime",runtime.adapter.name,{"adapter_id":runtime.adapter.id,"release":release,"install":self.store.settings["runtime_install"]})
+        self.jobs.submit("Check for updates",runtime.check,complete,self.background_error if auto else self.error)
 
     def install_runtime(self,done=None):
         if self.runtime_busy:self.statusBar().showMessage(tr("A runtime operation is in progress.")); return
-        self.check_runtime(done=lambda release:self.queue_download("runtime","llama.cpp CUDA",{"release":release,"install":True},done))
+        runtime=self.runtime
+        self.check_runtime(done=lambda release:self.queue_download("runtime",runtime.adapter.name,{"adapter_id":runtime.adapter.id,"release":release,"install":True},done))
 
     def install_staged_runtime(self):
-        staged=read_json(self.store.config/"runtime_staged.json",{})
+        runtime=self.runtime
+        staged=read_json(self.runtime.receipt("staged"),{})
         if not staged:self.error("No verified runtime is ready to install."); return
         if self.runtime_busy:return
         self.runtime_busy=True
         def install(control,progress):
-            with self.manager.lock:return self.runtime.install(Path(staged["path"]),control,self.manager.stop_all,self.manager.start_many,self.manager.wait_ready_many)
+            with self.manager.lock:return runtime.install(Path(staged["path"]),control,lambda:self.manager.stop_runtime(runtime.adapter.id),self.manager.start_many,self.manager.wait_ready_many)
         def complete(_):self.runtime_busy=False; self.refresh_runtime()
         def failed(message):self.runtime_busy=False; self.error(message)
         self.jobs.submit("Install downloaded runtime",install,complete,failed)
 
     def setup_qwen(self):
-        if self.runtime.executable.exists():self.recommended("Q8_0",True)
-        else:self.install_runtime(lambda _:self.recommended("Q8_0",True))
+        self.install_manifest('qwen3-asr-17b-q8',setup=True)
 
     def setup_ready(self,value):
         atomic_json(self.store.config/"setup_result.json",{"state":"READY","api":value,"gpu":self.gpu_state,"time":datetime.now(timezone.utc).isoformat()})
@@ -586,6 +708,8 @@ class ApplicationPages:
         return {"source":source,"offsets":updated,"text":"\n".join(chunks)}
 
     def extend_settings(self):
+        from .network_ui import add_network_tab
+        add_network_tab(self)
         self.hf_token=QLineEdit(); self.hf_token.setEchoMode(QLineEdit.EchoMode.Password); bind(self.hf_token,"Leave empty to keep the saved token. Encrypted with Windows DPAPI.",setter="setPlaceholderText")
         self.access_settings_box.addWidget(label("Access token (optional)","subtitle")); self.access_settings_box.addWidget(self.hf_token)
         self.clear_token=bind(QCheckBox(),"Remove saved token"); self.access_settings_box.addWidget(self.clear_token)
@@ -594,6 +718,7 @@ class ApplicationPages:
         self.refresh_app_update()
 
     def settings_guard(self,updated):
+        if hasattr(self,'network_editor'):updated['download_proxy']=self.network_editor.policy()
         if updated["default_port"]<1:raise ValueError("Default port must be at least 1.")
         changed_dirs=[k for k in ("models_dir","runtime_dir","logs_dir") if updated[k]!=self.store.settings[k]]
         if changed_dirs and (self.runtime_busy or self.model_update_busy or any(s.get("state") in {"READY","RUNNING","STARTING","LOADING MODEL"} for s in self.profile_states.values()) or any(i["state"] in {"Running","Pausing"} and i["resumable"] for i in self.jobs.items.values())):

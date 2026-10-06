@@ -12,8 +12,8 @@ def clean_text(text: str) -> str:
     return re.sub(r"^language [^<\r\n]{1,80}<asr_text>", "", text, count=1)
 
 
-class CompatibilityProxy:
-    def __init__(self, port, upstream_port, upstream_host="127.0.0.1"):
+class APIGateway:
+    def __init__(self, port, upstream_port, upstream_host="127.0.0.1", strip_prefix=False):
         host = "127.0.0.1" if upstream_host in {"0.0.0.0", "localhost"} else upstream_host
         if host == "::": host = "::1"
         if ":" in host: host = f"[{host}]"
@@ -24,7 +24,7 @@ class CompatibilityProxy:
             def do_GET(self): self.forward()
             def do_POST(self): self.forward()
             def forward(self):
-                paths = {"/health", "/v1/models"} if self.command=="GET" else {"/v1/audio/transcriptions", "/audio/transcriptions"}
+                paths = {"/health", "/v1/models"} if self.command=="GET" else {"/v1/audio/transcriptions", "/audio/transcriptions", "/v1/chat/completions", "/v1/embeddings", "/v1/rerank", "/v1/audio/speech"}
                 if self.path not in paths: self.send_error(404); return
                 self.connection.settimeout(30)
                 try:
@@ -37,7 +37,7 @@ class CompatibilityProxy:
                     response = client.request(self.command, upstream+self.path, headers=headers, content=body)
                     content = response.content
                     content_type = response.headers.get("content-type", "application/octet-stream")
-                    if response.is_success and self.command=="POST":
+                    if strip_prefix and response.is_success and self.path.endswith('/audio/transcriptions'):
                         try:
                             data = response.json()
                             if isinstance(data, dict) and isinstance(data.get("text"), str):
@@ -59,3 +59,7 @@ class CompatibilityProxy:
 
     def stop(self):
         self.server.shutdown(); self.server.server_close(); self.client.close()
+
+class CompatibilityProxy(APIGateway):
+    def __init__(self, port, upstream_port, upstream_host='127.0.0.1'):
+        super().__init__(port, upstream_port, upstream_host, strip_prefix=True)
