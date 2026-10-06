@@ -47,6 +47,14 @@ def port_available(host: str, port: int) -> bool:
 
 
 def build_command(profile: Profile, store: Store, help_text: str) -> list[str]:
+    from .adapters import get_adapter
+    adapter = get_adapter(profile.runtime_id)
+    adapter.require_implemented()
+    if profile.type not in adapter.supported_tasks: raise ValueError('This runtime does not support the selected task.')
+    return adapter.build_launch_command(profile, store, help_text)
+
+
+def build_llama_command(profile: Profile, store: Store, help_text: str) -> list[str]:
     profile.validate()
     executable = store.runtime / "llama-server.exe"
     model = store.path(profile.model_path)
@@ -69,9 +77,16 @@ def build_command(profile: Profile, store: Store, help_text: str) -> list[str]:
         if not mmproj.is_file() or mmproj.suffix.lower() != ".gguf": raise ValueError("MMProj file is missing or incomplete.")
         flag(["--mmproj", "-mm"], mmproj)
     flag(["--host"], profile.host); flag(["--port"], profile.port)
-    flag(["--n-gpu-layers", "--gpu-layers", "-ngl"], profile.gpu_layers)
+    if profile.backend == 'vulkan': raise ValueError('This llama.cpp installation uses CUDA; select CUDA or CPU.')
+    flag(["--n-gpu-layers", "--gpu-layers", "-ngl"], 0 if profile.backend == 'cpu' else profile.gpu_layers)
     flag(["--parallel", "-np"], profile.parallel)
     if "--alias" in help_text: flag(["--alias", "-a"], profile.id)
+    if profile.type in {'embedding', 'reranker'}:
+        if '--embedding' not in help_text: raise ValueError('Runtime does not advertise embedding support.')
+        command.append('--embedding')
+    if profile.type == 'reranker':
+        if '--reranking' not in help_text: raise ValueError('Runtime does not advertise reranking support.')
+        command.append('--reranking')
     # Keep the initial GPU footprint bounded; the profile can explicitly override it.
     if "--ctx-size" in help_text and not any(a.split("=")[0] in {"--ctx-size", "-c"} for a in profile.extra_args):
         flag(["--ctx-size", "-c"], 4096)
@@ -134,17 +149,19 @@ class Manager:
             for port in ports:
                 if not port_available(profile.host if port == profile.port else "127.0.0.1", port):
                     raise ValueError(f"Port {port} is already in use. Existing services were not modified.")
-            executable = self.store.runtime/"llama-server.exe"
-            if not executable.exists(): raise ValueError("llama.cpp Runtime 尚未安装。")
-            help_text = run_binary(executable, "--help", timeout=30)
+            from .adapters import get_adapter
+            adapter = get_adapter(profile.runtime_id); adapter.require_implemented()
+            executable = adapter.executable(self.store)
+            if not executable.exists(): raise ValueError(adapter.name + ': runtime is not installed.')
+            help_text = run_binary(executable, "--help", timeout=30) if executable.suffix == '.exe' else ''
             command = build_command(profile, self.store, help_text)
             session = uuid.uuid4().hex
             spec = {"session": session, "profile_id": profile.id, "command": command,
-                    "cwd": str(executable.parent), "record": str(self.records/(profile.id+".json")),
+                    "cwd": str(adapter.runtime_dir(self.store)), "record": str(self.records/(profile.id+".json")),
                     "log": str(self.store.logs/(profile.id+".log")),
                     "stop_file": str(self.records/(session+".stop")),
                     "proxy": profile.compatibility_proxy, "proxy_port": profile.proxy_port, "port": profile.port,
-                    "host": profile.host}
+                    "host": profile.host, "proxy_model_id":profile.id if profile.type=='asr' else None}
             job = self.records/(session+".job.json"); atomic_json(job, spec)
             supervisor = launch_hidden(helper_command("--supervise", str(job)), self.store.root)
             deadline = time.monotonic()+15
@@ -196,9 +213,43 @@ class Manager:
         self.stop(profile_id)
         return self.start(profile_id)
 
+    def switch(self, profile_id, control=None, progress=lambda _:None):
+        """Replace only managed services sharing the target ports; restore on failure."""
+        from .api import wait_ready
+        from .jobs import Control
+        control = control or Control()
+        with self.lock:
+            profile = self.store.get_profile(profile_id)
+            if self.is_running(profile_id):
+                return self.record(profile_id) | wait_ready(profile,lambda:self.is_running(profile_id),control=control)
+            from .adapters import get_adapter
+            adapter = get_adapter(profile.runtime_id)
+            if not adapter.executable(self.store).exists(): raise ValueError('Install the selected runtime first.')
+            if not self.store.path(profile.model_path).exists(): raise ValueError('Model file or directory is missing.')
+            ports = {profile.port} | ({profile.proxy_port} if profile.compatibility_proxy else set())
+            previous = [p.id for p in self.store.profiles if p.id != profile_id and self.is_running(p.id)
+                        and ports & ({p.port} | ({p.proxy_port} if p.compatibility_proxy else set()))]
+            stopped = []
+            control.check()
+            try:
+                for identity in previous:
+                    self.stop(identity); stopped.append(identity)
+                control.check()
+                record = self.start(profile_id)
+                return record | wait_ready(profile,lambda:self.is_running(profile_id),control=control,progress=progress)
+            except Exception:
+                self.stop(profile_id)
+                self.start_many(stopped); self.wait_ready_many(stopped)
+                raise
+
     def stop_all(self):
         running = [p.id for p in self.store.profiles if self.is_running(p.id)]
         for pid in running: self.stop(pid)
+        return running
+
+    def stop_runtime(self, runtime_id):
+        running = [p.id for p in self.store.profiles if p.runtime_id == runtime_id and self.is_running(p.id)]
+        for identity in running: self.stop(identity)
         return running
 
     def start_many(self, ids):
@@ -246,7 +297,7 @@ def supervise(job_path: Path):
         atomic_json(record_path, record)
         if job.get("proxy"):
             from .proxy import CompatibilityProxy
-            proxy=CompatibilityProxy(job["proxy_port"],job["port"],job["host"]); proxy.start()
+            proxy=CompatibilityProxy(job["proxy_port"],job["port"],job["host"],asr_model_id=job.get('proxy_model_id')); proxy.start()
         def read_output():
             for line in iter(process.stdout.readline, b""):
                 logger.info(line.decode("utf-8",errors="replace").rstrip())

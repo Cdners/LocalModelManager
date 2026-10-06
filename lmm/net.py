@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import ssl
@@ -16,8 +17,9 @@ from .jobs import Control, Interrupted
 from . import __version__
 
 
-def client(**kwargs) -> httpx.Client:
-    return httpx.Client(verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+def client(network=None, **kwargs) -> httpx.Client:
+    from .network import client_options
+    return httpx.Client(**client_options(network),
                         timeout=httpx.Timeout(30, connect=10), follow_redirects=True,
                         headers={"User-Agent": f"LocalModelManager/{__version__}"}, **kwargs)
 
@@ -27,7 +29,7 @@ def request_json(url, control=None, method="GET", **kwargs):
     for attempt in range(4):
         control.check()
         try:
-            with client() as session:
+            with client(network=control.network) as session:
                 result = session.request(method, url, **kwargs)
                 result.raise_for_status()
                 return result.json()
@@ -48,9 +50,9 @@ def sha256(path: Path, control=None):
     return digest.hexdigest()
 
 
-class Downloader:
+class DownloadManager:
     """The application's resumable transfer path; only verified files are promoted."""
-    def __init__(self, session_factory=client):
+    def __init__(self, session_factory=None):
         self.session_factory = session_factory
 
     def download(self, url: str, target: Path, control: Control, progress=lambda _: None,
@@ -78,7 +80,7 @@ class Downloader:
                 needed = max(0, expected_size - offset) + 64 * 1024**2
                 if shutil.disk_usage(target.parent).free < needed:
                     raise ValueError("Not enough free disk space for this download.")
-            request_headers = dict(headers or {})
+            request_headers = {'Accept-Encoding': 'identity'} | dict(headers or {})
             if offset:
                 request_headers["Range"] = f"bytes={offset}-"
                 if saved.get("etag"):
@@ -86,7 +88,8 @@ class Downloader:
             try:
                 if expected_size and offset == expected_size:
                     break
-                with self.session_factory() as session, session.stream("GET", url, headers=request_headers) as response:
+                factory = self.session_factory or (lambda: client(network=control.network))
+                with factory() as session, session.stream("GET", url, headers=request_headers) as response:
                     if response.status_code == 416 and expected_size and offset == expected_size:
                         break
                     response.raise_for_status()
@@ -96,10 +99,10 @@ class Downloader:
                             raise ValueError("Invalid resume Content-Range; partial file was not appended.")
                         total = int(match[3])
                         if saved.get("etag") and response.headers.get("etag") and saved["etag"] != response.headers["etag"]:
-                            partial.unlink(missing_ok=True)
-                            saved = {}
-                            raise httpx.ReadError("Remote object changed; restarting download.")
+                            raise ValueError("Remote ETag changed; partial download preserved. Resolve metadata again.")
                     else:
+                        if offset:
+                            raise ValueError("Server did not honor Range; partial download preserved instead of restarting.")
                         offset = 0
                         total = int(response.headers.get("content-length", 0)) or expected_size or 0
                     if expected_size is not None and total and total != expected_size:
@@ -111,8 +114,9 @@ class Downloader:
                     saved = {"identity": identity, "etag": response.headers.get("etag", etag), "size": total, "sha256": expected_sha}
                     atomic_json(state_path, saved)
                     started = time.monotonic(); initial = offset; last_emit = 0.0
+                    slow_since = None
                     with partial.open("ab" if offset else "wb") as handle:
-                        for chunk in response.iter_bytes(1024 * 512):
+                        for chunk in response.iter_bytes(64 * 1024):
                             control.check()
                             handle.write(chunk); offset += len(chunk)
                             if offset > total:
@@ -120,10 +124,13 @@ class Downloader:
                             elapsed = max(0.001, time.monotonic() - started)
                             if elapsed - last_emit > 0.2 or offset == total:
                                 speed = (offset - initial) / elapsed
+                                slow_since = (slow_since or elapsed) if speed < 500 * 1024 else None
                                 progress({"downloaded": offset, "total": total, "speed": speed,
-                                          "eta": (total-offset)/speed if speed else None, "file": target.name})
+                                          "eta": (total-offset)/speed if speed else None, "file": target.name,
+                                          "detail": "Slow download: pause to change proxy or retry." if slow_since is not None and elapsed-slow_since >= 10 else ""})
                                 last_emit = elapsed
                         handle.flush()
+                        os.fsync(handle.fileno())
                     if offset != total:
                         raise httpx.ReadError("Incomplete response.")
                     expected_size = total
@@ -147,4 +154,7 @@ class Downloader:
         partial.replace(target)
         state_path.unlink(missing_ok=True)
         return {"path": str(target), "size": target.stat().st_size, "sha256": digest, "etag": saved.get("etag", etag)}
+
+# Backwards-compatible import for existing integrations.
+Downloader = DownloadManager
 

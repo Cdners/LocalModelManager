@@ -58,7 +58,7 @@ for language_index, language in enumerate(('zh', 'en')):
                 scroll = window.stack.widget(index)
                 if scroll.horizontalScrollBar().maximum() > 0: report['horizontal_overflow'].append(path.name)
         if dimensions[0] == 1240:
-            for tab in (1, 2):
+            for tab in range(1, window.settings_tabs.count()):
                 window.settings_tabs.setCurrentIndex(tab); app.processEvents()
                 path = output / f'{language}-Settings-tab{tab}.png'; window.grab().save(str(path)); report['screenshots'].append(str(path))
             window.settings_tabs.setCurrentIndex(0)

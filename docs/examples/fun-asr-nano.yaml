@@ -1,0 +1,16 @@
+id: fun-asr-nano-2512
+name: Fun-ASR Nano 2512 Q8_0
+task: asr
+source:
+  type: huggingface
+  repo: FunAudioLLM/Fun-ASR-Nano-2512-GGUF
+runtime:
+  recommended: audio_cpp
+  options:
+    family: fun_asr_nano
+files:
+  model:
+    pattern: "*q8_0.gguf"
+api:
+  protocol: openai
+  endpoint: /v1/audio/transcriptions

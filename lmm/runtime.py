@@ -102,28 +102,40 @@ def safe_extract(archive: Path, target: Path):
 
 
 class Runtime:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, adapter=None):
+        from .adapters import get_adapter
         self.store = store
+        self.adapter = adapter or get_adapter('llama_cpp')
+        self.prefix = '.llama' if self.adapter.id == 'llama_cpp' else '.' + self.adapter.id
+
+    @property
+    def directory(self): return self.adapter.runtime_dir(self.store)
+
+    def receipt(self, kind):
+        name = 'runtime_' + ('' if self.adapter.id == 'llama_cpp' else self.adapter.id + '_') + kind + '.json'
+        return self.store.config / name
 
     @property
     def executable(self):
-        return self.store.runtime / "llama-server.exe"
+        return self.adapter.executable(self.store)
 
     def installed(self):
-        return read_json(self.store.runtime / "runtime_info.json", {})
+        return read_json(self.directory / "runtime_info.json", {})
 
     def check(self, control, progress=lambda _: None):
         info = hardware()
-        release = latest_release(control, info["cuda_major"])
+        self.adapter.require_implemented()
+        release = self.adapter.resolve_release(control, info)
+        release['adapter_id'] = self.adapter.id
         release["hardware"] = info
-        atomic_json(self.store.config / "runtime_latest.json", release)
+        atomic_json(self.receipt("latest"), release)
         return release
 
     def stage(self, release, control, progress=lambda _: None):
-        cache = self.store.root / "downloads" / "runtime" / release["binary_tag"]
+        cache = self.store.root / "downloads" / "runtime" / self.adapter.id / release["binary_tag"]
         cache.mkdir(parents=True, exist_ok=True)
-        parent = self.store.runtime.parent; parent.mkdir(parents=True, exist_ok=True)
-        stage = parent / (".llama-stage-" + uuid.uuid4().hex)
+        parent = self.directory.parent; parent.mkdir(parents=True, exist_ok=True)
+        stage = parent / (self.prefix + "-stage-" + uuid.uuid4().hex)
         stage.mkdir()
         try:
             receipts = []
@@ -135,56 +147,43 @@ class Runtime:
                     progress, asset["size"], expected)
                 receipts.append(receipt)
                 safe_extract(Path(receipt["path"]), stage)
-            servers = list(stage.rglob("llama-server.exe"))
-            if len(servers) != 1:
-                raise ValueError("Runtime package must contain one llama-server.exe.")
-            binary_dir = servers[0].parent
-            if binary_dir != stage:
-                for file in binary_dir.iterdir():
-                    if file.is_file(): shutil.copy2(file, stage / file.name)
-            # Companion archives may use their own subdirectory.
-            for dll in list(stage.rglob("*.dll")):
-                if dll.parent != stage and not (stage / dll.name).exists(): shutil.copy2(dll, stage / dll.name)
-            if not list(stage.glob("*cuda*.dll")):
-                raise ValueError("CUDA backend DLL is missing.")
-            progress({"detail": "Checking runtime version and CUDA device"})
-            version = run_binary(stage / "llama-server.exe", "--version")
-            devices = run_binary(stage / "llama-server.exe", "--list-devices", timeout=45)
-            if not re.search(r"CUDA\d|NVIDIA", devices, re.I):
-                raise ValueError("Runtime cannot see a CUDA GPU. Existing runtime preserved. " + devices[-600:])
+            progress({'detail': 'Checking runtime version and CUDA device'})
+            version, devices = self.adapter.verify_stage(stage, release)
+            if not re.search(r'cuda', devices, re.I):
+                raise ValueError('Runtime cannot see a CUDA GPU; installed runtime preserved.')
             info = {"version": version, "release_tag": release["stable_tag"], "binary_tag": release["binary_tag"],
                     "installed_at": datetime.now(timezone.utc).isoformat(), "source_url": release["source_url"],
-                    "backend": "CUDA", "devices": devices, "assets": receipts}
+                    "adapter_id": self.adapter.id, "backend": "CUDA", "devices": devices, "assets": receipts}
             atomic_json(stage / "runtime_info.json", info)
-            atomic_json(self.store.config / "runtime_staged.json", {"path": str(stage), "info": info})
+            atomic_json(self.receipt("staged"), {"path": str(stage), "info": info})
             return stage
         except BaseException:
-            if stage.exists() and stage.resolve().parent == parent.resolve() and stage.name.startswith(".llama-stage-"):
+            if stage.exists() and stage.resolve().parent == parent.resolve() and stage.name.startswith(self.prefix + "-stage-"):
                 shutil.rmtree(stage)
             raise
 
     def install(self, stage: Path, control, stop=lambda: [], start=lambda ids: None, health=lambda ids: None):
-        target = self.store.runtime
+        target = self.directory
         stage = Path(stage).resolve()
-        if stage.parent != target.parent.resolve() or not stage.name.startswith(".llama-stage-"):
+        if stage.parent != target.parent.resolve() or not stage.name.startswith(self.prefix + "-stage-"):
             raise ValueError("Runtime staging directory is outside the managed parent.")
-        if not (stage / "runtime_info.json").exists() or not (stage / "llama-server.exe").exists():
+        if not (stage / "runtime_info.json").exists() or not (stage / self.adapter.executable_name).exists():
             raise ValueError("Runtime stage has not been verified.")
         if target.exists() and any(target.iterdir()) and not (target / "runtime_info.json").exists():
             raise ValueError("Runtime directory contains unmanaged files; choose an empty directory.")
         control.check()
         running = stop()
-        backup = target.with_name(".llama-backup-" + uuid.uuid4().hex)
+        backup = target.with_name(self.prefix + "-backup-" + uuid.uuid4().hex)
         old_exists = target.exists()
         swapped = False
-        journal = self.store.config / "runtime_transaction.json"
+        journal = self.receipt("transaction")
         atomic_json(journal, {"target": str(target), "stage": str(stage), "backup": str(backup), "profiles": running, "old_exists": old_exists, "state": "prepared"})
         try:
             if old_exists: target.rename(backup)
             stage.rename(target); swapped = True
             start(running); health(running)
             atomic_json(journal, {"state": "complete", "backup": str(backup), "target": str(target)})
-            (self.store.config / "runtime_staged.json").unlink(missing_ok=True)
+            (self.receipt("staged")).unlink(missing_ok=True)
             return self.installed()
         except Exception as exc:
             try:
@@ -198,18 +197,18 @@ class Runtime:
             raise RuntimeError(f"Runtime update failed; previous runtime restored: {exc}") from exc
 
     def recover(self, manager):
-        journal=self.store.config/"runtime_transaction.json"
+        journal=self.receipt("transaction")
         data=read_json(journal,{})
         if data.get("state")!="prepared":return None
         target=Path(data["target"]).resolve(); backup=Path(data["backup"]).resolve()
         stage=Path(data["stage"]).resolve()
-        if target!=self.store.runtime or backup.parent!=target.parent or not backup.name.startswith(".llama-backup-") or stage.parent!=target.parent or not stage.name.startswith(".llama-stage-"):
+        if target!=self.directory or backup.parent!=target.parent or not backup.name.startswith(self.prefix + "-backup-") or stage.parent!=target.parent or not stage.name.startswith(self.prefix + "-stage-"):
             raise ValueError("Runtime recovery paths do not match this installation.")
         ids=data.get("profiles",[])
         with manager.lock:
             for identity in ids:manager.stop(identity)
             if backup.exists():
-                if target.exists():target.rename(target.with_name(".llama-stage-recovered-"+uuid.uuid4().hex))
+                if target.exists():target.rename(target.with_name(self.prefix + "-stage-recovered-"+uuid.uuid4().hex))
                 backup.rename(target)
             manager.start_many(ids); manager.wait_ready_many(ids)
         atomic_json(journal,data|{"state":"recovered"})

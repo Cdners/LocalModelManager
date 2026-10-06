@@ -17,9 +17,9 @@ from .workspace import ApplicationPages, label, buttons
 
 PAGES = [
     ('Dashboard', 'Overview', 'Manage services, monitor your GPU, and connect your apps.'),
-    ('Models', 'Model library', 'Find, download, and manage GGUF models.'),
+    ('Models', 'Model library', 'Import models and choose a compatible runtime.'),
     ('Downloads', 'Downloads', 'Track transfers and resume unfinished downloads.'),
-    ('Runtime', 'Runtime', 'Manage the llama.cpp engine used by your services.'),
+    ('Runtime', 'Runtime', 'Manage independent inference engines.'),
     ('OpenTypeless', 'Voice input', 'Connect OpenTypeless and test local speech recognition.'),
     ('Logs', 'Logs', 'Inspect application and model service output.'),
     ('Settings', 'Settings', 'Make this workspace your own.'),
@@ -255,7 +255,13 @@ class Window(ApplicationPages, QMainWindow):
         if self.last_metadata:
             for row, item in enumerate(self.last_metadata['files']):
                 self.repo_table.item(row, 3).setText('MMProj' if item['is_mmproj'] else tr('Model'))
+            self.repo_note.setText(self.compatibility_text(self.last_metadata))
         self.refresh_installed(); self.refresh_downloads(); self.refresh_runtime(); self.refresh_app_update(); self.render_state()
+        if hasattr(self, 'network_editor'): self.network_editor.refresh_language()
+        self.refresh_profiles()
+        for i, title in enumerate(('Use global proxy','Direct','Custom proxy')): self.task_proxy.setItemText(i,tr(title))
+        from .adapters import adapters
+        for i, adapter in enumerate(adapters().values()): self.runtime_selector.setItemText(i,adapter.name + ('' if adapter.implemented else ' · '+tr('Reserved')))
         if self.gpu_state: self.polled('gpu', self.gpu_state)
         self.statusBar().showMessage(tr('Settings saved'))
         if hasattr(self, 'tray'): self.tray.build_menu()

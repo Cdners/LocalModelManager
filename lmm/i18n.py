@@ -241,6 +241,24 @@ ZH = {
     "A manager is already running but its window cannot be reached. Exit the manager in the other Windows account or background test environment and try again.": "已有管理器实例，但无法唤出它的窗口。请退出其他 Windows 账户或后台测试环境中的管理器后重试。",
 }
 
+
+
+ZH.update({'Import models and choose a compatible runtime.': '导入模型并选择兼容的运行环境。', 'Manage independent inference engines.': '独立管理各种推理引擎。', 'Network': '网络', 'Download proxy': '下载代理', 'Proxy mode': '代理模式', 'Proxy URL': '代理地址', 'Proxy URL (optional)': '可直接粘贴标准代理 URL', 'Use global proxy': '使用全局代理', 'Direct': '直连（不使用代理）', 'System proxy': '使用系统代理', 'HTTP proxy': 'HTTP 代理', 'HTTPS proxy': 'HTTPS 代理', 'SOCKS5 (local DNS)': 'SOCKS5（本地 DNS）', 'SOCKS5H (proxy DNS)': 'SOCKS5H（代理解析 DNS）', 'Username (optional)': '用户名（可选）', 'Password (optional)': '密码（可选）', 'Leave empty to keep the saved password.': '留空保留已保存的密码。', 'Test connection': '测试连接', 'Test Hugging Face': '测试 Hugging Face', 'Test GitHub': '测试 GitHub', 'Applies to metadata, models, runtimes and app updates. Local inference stays direct.': '应用于元数据查询、模型、运行环境和软件更新；本地推理始终直连。', 'Model Registry': '模型目录', 'Download and configure': '下载并配置', 'Import manifest': '导入模型清单', 'Resolve source': '解析来源', 'Local file': '本地文件', 'Local directory': '本地目录', 'Model file': '模型文件', 'Model file / directory': '模型文件 / 目录', 'Runtime adapter': '运行环境适配器', 'Select runtime explicitly': '请选择运行环境', 'Reserved': '已预留，尚未实现', 'Embedding': '向量嵌入', 'Reranker': '重排序', 'Text to speech (TTS)': '语音合成（TTS）', 'Backend': '计算后端', 'Runtime options (JSON)': '运行环境选项（JSON）', 'Select model file': '选择模型文件', 'Compatible runtime': '兼容的运行环境', 'Recommended': '推荐', 'Inspect local model': '检查本地模型', 'Select at least one model file.': '请至少选择一个模型文件。', 'Pause the task before changing its proxy.': '请先暂停任务，再更改代理。', 'Not installed': '未安装', 'Proxy for new downloads': '新下载任务的代理', 'Custom proxy': '自定义代理', 'Slow download: pause to change proxy or retry.': '下载较慢：可暂停后更换代理或重试。', 'Runtime adapter · {runtime}': '运行环境 · {runtime}'})
+
+
+ZH.update({"Task":"任务","Architecture":"架构","Format":"格式","Unknown":"未知","Model source / search keywords":"模型来源 / 搜索关键词","Double-click a result to list its model files.":"双击结果查看模型文件。","No matching model repositories found.":"未找到匹配的模型仓库。","No models installed yet. Import a model source or choose a catalog entry.":"暂无模型，请导入模型来源或选择模型目录中的条目。"})
+
+ZH.update({
+    'Not configured':'尚未配置',
+    'Install and switch':'安装并切换',
+    'Switch to this model':'切换到此模型',
+    'Install this model and its runtime, then switch the active service.':'自动安装模型和运行环境，完成后切换服务。',
+    'This runtime is planned, but not available yet.':'此运行环境尚未实现，暂不能检查或安装。请使用 llama.cpp、audio.cpp 或 transcribe.cpp。',
+    'Install the selected runtime first.':'请先安装所选模型的运行环境。',
+})
+
+ZH['Provider: Local / Custom Whisper\nBase URL: {url}\nModel: {model}\nAPI key: leave empty\n\nThe gateway follows the model selected in the manager.']='服务商：Local / Custom Whisper\n接口地址：{url}\n模型：{model}\nAPI 密钥：留空\n\n固定入口自动使用管理器中已切换的模型。'
+
 _language = "zh"
 _english = {value: key for key, value in ZH.items()}
 

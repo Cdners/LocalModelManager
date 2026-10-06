@@ -10,7 +10,8 @@ Local Model Manager uses the following upstream projects. Their licenses remain 
 | PySide6 / Shiboken6 | https://code.qt.io/cgit/pyside/pyside-setup.git/ |
 | Qt 6 | https://code.qt.io/cgit/qt/ |
 | httpx / httpcore | https://github.com/encode/httpx · https://github.com/encode/httpcore |
-| huggingface_hub | https://github.com/huggingface/huggingface_hub |
+| PyYAML | https://github.com/yaml/pyyaml |
+| socksio | https://github.com/sethmlarson/socksio |
 | nvidia-ml-py | https://pypi.org/project/nvidia-ml-py/ |
 | psutil | https://github.com/giampaolo/psutil |
 | packaging | https://github.com/pypa/packaging |
@@ -19,9 +20,14 @@ Local Model Manager uses the following upstream projects. Their licenses remain 
 
 PySide6/Shiboken and the applicable Qt libraries are distributed under their open-source license options, including LGPLv3. No restriction on modification or reverse engineering for debugging modifications to these libraries is intended. Corresponding sources are available from the upstream repositories and [Qt source archives](https://download.qt.io/official_releases/qt/); use the versions in the packaged inventory. License texts are in `app/licenses/` and [docs/licenses/](docs/licenses/).
 
-The application downloads **llama.cpp** and model files separately. They are not included in the application ZIP. Check each selected runtime/model's own license and model card:
+The application downloads **llama.cpp**, **audio.cpp**, **transcribe.cpp**, their runtime dependencies, and model files separately. They are not included in the application ZIP. Check each selected runtime/model's own license and model card:
 
 - llama.cpp: https://github.com/ggml-org/llama.cpp
+- audio.cpp: https://github.com/0xShug0/audio.cpp
+- transcribe.cpp: https://github.com/handy-computer/transcribe.cpp
+- NVIDIA CUDA runtime / cuBLAS wheels: https://pypi.org/project/nvidia-cuda-runtime-cu12/ · https://pypi.org/project/nvidia-cublas-cu12/
+- Fun-ASR official GGUF: https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-GGUF
+- Fun-ASR transcribe.cpp GGUF: https://huggingface.co/handy-computer/fun-asr-nano-2512-gguf
 - Qwen3-ASR GGUF: https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF
 - Qwen3-ASR: https://github.com/QwenLM/Qwen3-ASR
 

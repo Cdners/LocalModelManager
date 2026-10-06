@@ -27,6 +27,13 @@ def model_ids(data):
     if not ids: raise ValueError("The server has not exposed a model ID yet.")
     return ids
 
+def connection_model_id(profile, ids):
+    if not ids:return ''
+    if profile.type=='asr' and profile.compatibility_proxy:
+        from .proxy import ASR_ALIAS
+        return ASR_ALIAS
+    return ids[0]
+
 
 def parse_transcription(response: httpx.Response):
     if not response.is_success:
@@ -52,7 +59,8 @@ def snapshot(profile: Profile, session=None):
         if profile.type == "asr" and result["models"]:
             # Deliberately omit audio. Validation errors confirm the route without performing inference.
             probe = session.post(url+"/audio/transcriptions", files={"model": (None, result["model_ids"][0])})
-            result["transcription"] = probe.status_code in {200, 400, 415, 422}
+            from .adapters import get_adapter
+            result["transcription"] = get_adapter(profile.runtime_id).transcription_route_available(probe)
             result["route_status"] = probe.status_code
         if result["health"] and result["models"] and (profile.type != "asr" or result["transcription"]): result["state"] = "READY"
         if result["models"] and profile.type == "asr" and not result["transcription"]:

@@ -19,6 +19,7 @@ class Interrupted(Exception):
 class Control:
     event: threading.Event = field(default_factory=threading.Event)
     paused: bool = False
+    network: dict | None = None
 
     def check(self):
         if self.event.is_set():
@@ -62,8 +63,11 @@ class Jobs(QObject):
             except Interrupted as exc:
                 self.changed.emit(key, {"state": str(exc)})
             except Exception as exc:
-                logging.getLogger("lmm").exception("Task failed: %s", item["title"])
-                self.failed.emit(key, str(exc))
+                from .network import safe_error
+                error=safe_error(exc)
+                # Exception chains from HTTP transports can include proxy URLs.
+                logging.getLogger("lmm").error("Task failed: %s (%s): %s",item["title"],type(exc).__name__,error)
+                self.failed.emit(key, error)
         self.pool.submit(execute)
 
     def pause(self, key):
